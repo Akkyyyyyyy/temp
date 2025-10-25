@@ -8,12 +8,20 @@ export const transporter = nodemailer.createTransport({
   },
 });
 
-export const sendNewMemberEmail = async (to: string, name: string, password: string) => {
+export const sendEmail = async (to: string, subject: string, html: string) => {
   await transporter.sendMail({
-    from: `"Your Company Name" <${process.env.EMAIL_USER}>`,
+    from: `${process.env.SMTP_EMAIL}`,
     to,
-    subject: "Your account has been created",
-    html: `
+    subject,
+    html,
+  });
+};
+
+export const sendNewMemberEmail = async (to: string, name: string, password: string) => {
+  await sendEmail(
+    to,
+    "Your account has been created",
+    `
       <p>Hello ${name},</p>
       <p>Your account has been created. Here are your login credentials:</p>
       <ul>
@@ -22,6 +30,6 @@ export const sendNewMemberEmail = async (to: string, name: string, password: str
       </ul>
       <p>Please log in and change your password as soon as possible.</p>
       <p>Best regards,<br/>Your Team</p>
-    `,
-  });
+    `
+  );
 };

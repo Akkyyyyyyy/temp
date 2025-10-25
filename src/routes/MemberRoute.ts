@@ -13,9 +13,6 @@ memberRouter.put("/update/:id", authMiddleware, formUpload.single('photo'), Memb
 memberRouter.post("/upload-photo", authMiddleware, upload.single('photo'), createUploadMiddleware('photo', 'images'), MemberController.uploadProfilePhoto);
 memberRouter.delete('/remove-photo/:id',authMiddleware, MemberController.removeProfilePhoto);
 memberRouter.post("/login", MemberController.memberLogin);
-memberRouter.post("/forgot-password", MemberController.forgotPassword);
-memberRouter.post("/verify-otp", MemberController.verifyOTP);
-memberRouter.post("/reset-password", MemberController.resetPassword);
 memberRouter.delete("/delete/:id", MemberController.deleteMember);
 memberRouter.patch('/:id/ring-color',authMiddleware,MemberController.updateRingColor);
 

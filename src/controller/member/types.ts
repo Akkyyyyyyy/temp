@@ -75,36 +75,6 @@ export interface IUpdateMemberResponse {
   message: string;
   member?: Member;
 }
-export interface IForgotPasswordRequest {
-  email: string;
-}
-
-export interface IVerifyOTPRequest {
-  email: string;
-  otp: string;
-  token: string; // Add token to verify OTP request
-}
-
-export interface IResetPasswordRequest {
-  token: string;
-  newPassword: string;
-}
-
-export interface IPasswordResetToken {
-  email: string;
-  otp: string; // Include OTP in the token payload
-  type: 'password_reset';
-  iat: number;
-  exp: number;
-}
-
-export interface IVerifiedResetToken {
-  email: string;
-  type: 'password_reset_verified';
-  verifiedAt: number;
-  iat: number;
-  exp: number;
-}
 // Add to your types file
 export interface IGetAvailableMembersRequest {
   companyId: string;
