@@ -118,3 +118,10 @@ export interface IUpdateRingColorResponse {
   message: string;
   member?: Member;
 }
+
+export interface IToggleMemberStatusResponse {
+  success: boolean;
+  message: string;
+  member?: Member;
+  newStatus: boolean;
+}

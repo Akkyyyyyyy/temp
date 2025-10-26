@@ -10,6 +10,7 @@ import {
 import { Company } from "./Company";
 import { ProjectAssignment } from "./ProjectAssignment";
 import { GoogleToken } from "./GoogleToken";
+import { Package } from "./Package";
 
 export type MemberRole = "Project Manager" | "Creative Director" | "Lead Photographer" | "Photographer" | "Videographer" | "Editor" | "Assistant" | "Other";
 
@@ -71,6 +72,9 @@ export class Member implements IMember {
   @Column({ default: false })
   isMemberPassword: boolean;
 
+  @Column({ default: true })
+  active: boolean;
+
   @Column({
     type: "enum",
     enum: ["Project Manager", "Creative Director", "Lead Photographer", "Photographer", "Videographer", "Editor", "Assistant", "Other"]
@@ -85,6 +89,9 @@ export class Member implements IMember {
 
   @OneToMany(() => GoogleToken, (googleToken) => googleToken.member)
   googleTokens: GoogleToken[];
+
+  @OneToMany(() => Package, (pkg) => pkg.member)
+  packages: Package[];
 
   @CreateDateColumn()
   createdAt: Date;

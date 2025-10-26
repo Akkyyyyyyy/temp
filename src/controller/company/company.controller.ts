@@ -27,7 +27,7 @@ class CompanyController {
                 return;
             }
             const passwordHash = await bcrypt.hash(password, 10);
-            const country = 'US'
+            const country = 'UK'
             const newCompany = companyRepo.create({
                 name,
                 email,

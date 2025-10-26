@@ -2,11 +2,13 @@ import { Request, Response } from "express";
 import { AppDataSource } from "../../config/data-source";
 import { Member, MemberRole } from "../../entity/Member";
 import { Company } from "../../entity/Company";
-import { IAvailableMemberResponse, IConflict, ICreateMemberRequest, ICreateMemberResponse, IGetAvailableMembersRequest, IGetMembersByCompanyRequest, IGetMembersByCompanyResponse, IMemberResponse, IUpdateMemberRequest, IUpdateMemberResponse, IUpdateRingColorRequest, IUpdateRingColorResponse } from "./types";
+import { IAvailableMemberResponse, IConflict, ICreateMemberRequest, ICreateMemberResponse, IGetAvailableMembersRequest, IGetMembersByCompanyRequest, IGetMembersByCompanyResponse, IMemberResponse, IToggleMemberStatusResponse, IUpdateMemberRequest, IUpdateMemberResponse, IUpdateRingColorRequest, IUpdateRingColorResponse } from "./types";
 import bcrypt from "bcryptjs";
 import { sendNewMemberEmail, transporter, sendEmail } from "../../utils/mailer";
 import jwt from "jsonwebtoken";
 import { deleteFromS3, uploadToS3 } from "../../utils/s3upload";
+import { MAX_MEMBER_PER_COMPANY } from "../../constants/constant";
+import { generatePassword } from "../../helper/helper";
 
 
 
@@ -44,7 +46,7 @@ class MemberController {
         where: { company: { id: companyId } }
       });
 
-      if (memberCount >= 20) {
+      if (memberCount >= MAX_MEMBER_PER_COMPANY) {
         return res.status(400).json({
           success: false,
           message: "Member limit reached. Maximum 20 members per company."
@@ -54,7 +56,7 @@ class MemberController {
       const existing = await memberRepo.findOneBy({ email });
       if (existing) return res.status(400).json({ success: false, message: "Email already exists" });
 
-      const rawPassword = Math.floor(100000 + Math.random() * 900000).toString(); // e.g., "345678"
+      const rawPassword = generatePassword(6);
       const passwordHash = await bcrypt.hash(rawPassword, 10);
       const member = memberRepo.create({
         name,
@@ -168,6 +170,7 @@ class MemberController {
           phone: true,
           skills: true,
           ringColor: true,
+          active:true,
           assignments: {
             id: true,
             role: true,
@@ -255,6 +258,7 @@ class MemberController {
           bio: member.bio || '',
           profilePhoto: member.profilePhoto || '',
           ringColor: member.ringColor || '',
+          active: member.active,
           skills: member.skills || [],
           companyId: companyId,
           projects: filteredAssignments.map(assignment => {
@@ -636,8 +640,9 @@ class MemberController {
         id: member.id,
         name: member.name,
         email: member.email,
-        country: member.location,
-        company: member.company
+        location: member.location,
+        company: member.company,
+        country: member.company.country,
       };
 
       return res.status(200).json({ success: true, message: "Login successful", member: memberDetails, token });
@@ -1064,6 +1069,71 @@ class MemberController {
       });
     }
   };
+
+  public toggleMemberStatus = async (
+  req: Request<{ id: string }>,
+  res: Response<IToggleMemberStatusResponse>
+) => {
+  try {
+    const { id: memberId } = req.params;
+    const companyId = res.locals.token?.companyId;
+
+    if (!memberId) {
+      return res.status(400).json({
+        success: false,
+        message: "Member ID is required",
+        newStatus: false
+      });
+    }
+
+    // Find member with company relation
+    const member = await memberRepo.findOne({
+      where: { id: memberId },
+      relations: ["company"]
+    });
+
+    if (!member) {
+      return res.status(404).json({
+        success: false,
+        message: "Member not found",
+        newStatus: false
+      });
+    }
+
+    // Verify member belongs to the company
+    // if (member.company.id !== companyId) {
+    //   return res.status(403).json({
+    //     success: false,
+    //     message: "You can only toggle status for members from your own company",
+    //     newStatus: member.active
+    //   });
+    // }
+
+    // Toggle the active status
+    const newStatus = !member.active;
+    member.active = newStatus;
+    member.updatedAt = new Date();
+
+    const updatedMember = await memberRepo.save(member);
+
+    const statusMessage = newStatus ? "activated" : "deactivated";
+
+    return res.status(200).json({
+      success: true,
+      message: `Member ${statusMessage} successfully`,
+      member: updatedMember,
+      newStatus
+    });
+
+  } catch (err) {
+    console.error("Error toggling member status:", err);
+    return res.status(500).json({
+      success: false,
+      message: "Server error while toggling member status",
+      newStatus: false
+    });
+  }
+};
 }
 
 

@@ -469,57 +469,51 @@ class ProjectController {
         }
     };
 
-    private async checkScheduleConflicts(
-        projectId: string,
-        existingAssignments: ProjectAssignment[],
-        newStartDate: string,
-        newEndDate: string,
-        newStartHour: number,
-        newEndHour: number,
-        assignmentRepo: any
-    ): Promise<any[]> {
-        const conflicts = [];
+private async checkScheduleConflicts(
+    projectId: string,
+    existingAssignments: ProjectAssignment[],
+    newStartDate: string,
+    newEndDate: string,
+    newStartHour: number,
+    newEndHour: number,
+    assignmentRepo: any
+): Promise<any[]> {
+    const conflicts = [];
 
-        for (const assignment of existingAssignments) {
-            const memberId = assignment.member.id;
+    for (const assignment of existingAssignments) {
+        const memberId = assignment.member.id;
+        const memberName = assignment.member.name;
 
-            // Find other assignments for this member that overlap with the new schedule
-            const overlappingAssignments = await assignmentRepo
-                .createQueryBuilder("assignment")
-                .leftJoinAndSelect("assignment.project", "project")
-                .leftJoinAndSelect("assignment.member", "member")
-                .where("assignment.memberId = :memberId", { memberId })
-                .andWhere("assignment.projectId != :projectId", { projectId })
-                .andWhere(
-                    `(
-                    (project.startDate <= :newEndDate AND project.endDate >= :newStartDate)
-                    AND
-                    (
-                        (project.startHour < :newEndHour AND project.endHour > :newStartHour)
-                        OR
-                        (project.startDate < :newEndDate OR project.endDate > :newStartDate)
-                    )
-                )`,
-                    {
-                        newStartDate,
-                        newEndDate,
-                        newStartHour,
-                        newEndHour
-                    }
-                )
-                .getMany();
+        // Get all other assignments for this member
+        const otherAssignments = await assignmentRepo
+            .createQueryBuilder("assignment")
+            .leftJoinAndSelect("assignment.project", "project")
+            .leftJoinAndSelect("assignment.member", "member")
+            .where("assignment.memberId = :memberId", { memberId })
+            .andWhere("project.id != :projectId", { projectId })
+            .getMany();
 
-            for (const overlappingAssignment of overlappingAssignments) {
+
+        for (const otherAssignment of otherAssignments) {
+            const existingProject = otherAssignment.project;
+
+            const hasConflict = this.hasTimeConflict(
+                newStartDate, newEndDate, newStartHour, newEndHour,
+                existingProject.startDate, existingProject.endDate, 
+                existingProject.startHour, existingProject.endHour
+            );
+
+            if (hasConflict) {
                 conflicts.push({
                     memberId: assignment.member.id,
                     memberName: assignment.member.name,
-                    conflictingProjectId: overlappingAssignment.project.id,
-                    conflictingProjectName: overlappingAssignment.project.name,
+                    conflictingProjectId: existingProject.id,
+                    conflictingProjectName: existingProject.name,
                     conflictingProjectDates: {
-                        startDate: overlappingAssignment.project.startDate,
-                        endDate: overlappingAssignment.project.endDate,
-                        startHour: overlappingAssignment.project.startHour,
-                        endHour: overlappingAssignment.project.endHour
+                        startDate: existingProject.startDate,
+                        endDate: existingProject.endDate,
+                        startHour: existingProject.startHour,
+                        endHour: existingProject.endHour
                     },
                     newDates: {
                         startDate: newStartDate,
@@ -530,9 +524,62 @@ class ProjectController {
                 });
             }
         }
-
-        return conflicts;
     }
+
+    return conflicts;
+}
+
+private hasTimeConflict(
+    newStartDate: string, newEndDate: string, newStartHour: number, newEndHour: number,
+    existingStartDate: string, existingEndDate: string, existingStartHour: number, existingEndHour: number
+): boolean {
+    const newStart = new Date(newStartDate);
+    const newEnd = new Date(newEndDate);
+    const existingStart = new Date(existingStartDate);
+    const existingEnd = new Date(existingEndDate);
+
+    // No date overlap at all - no conflict
+    if (newStart > existingEnd || newEnd < existingStart) {
+        return false;
+    }
+
+    // Get all overlapping days
+    const overlappingDays = this.getOverlappingDays(newStart, newEnd, existingStart, existingEnd);
+    
+    // Check each overlapping day for time conflicts
+    for (const day of overlappingDays) {
+        // For each overlapping day, check if the daily working hours conflict
+        const hasTimeOverlap = newStartHour < existingEndHour && newEndHour > existingStartHour;
+
+        if (hasTimeOverlap) {
+            return true;
+        }
+    }
+    return false;
+}
+
+private getOverlappingDays(start1: Date, end1: Date, start2: Date, end2: Date): Date[] {
+    const overlappingDays: Date[] = [];
+    const overlapStart = new Date(Math.max(start1.getTime(), start2.getTime()));
+    const overlapEnd = new Date(Math.min(end1.getTime(), end2.getTime()));
+
+
+    // If no overlap, return empty array
+    if (overlapStart > overlapEnd) {
+        return overlappingDays;
+    }
+
+    // Add all days in the overlapping range
+    const current = new Date(overlapStart);
+    while (current <= overlapEnd) {
+        overlappingDays.push(new Date(current));
+        current.setDate(current.getDate() + 1);
+    }
+
+    return overlappingDays;
+}
+
+
 
     public deleteProject = async (
     req: Request<{}, {}, IDeleteProjectRequest>,
@@ -797,7 +844,7 @@ class ProjectController {
                         console.warn(`⚠️ Google Calendar sync failed for member ${memberId}: ${syncResult.message}`);
                     }
                 } else {
-                    console.log(`ℹ️ Member ${memberId} does not have Google Calendar integration`);
+                    // console.log(`ℹ️ Member ${memberId} does not have Google Calendar integration`);
                 }
             } catch (googleError) {
                 console.error(`❌ Failed to sync to Google Calendar for member ${memberId}:`, googleError);

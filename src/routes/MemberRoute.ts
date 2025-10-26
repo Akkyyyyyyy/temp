@@ -15,5 +15,6 @@ memberRouter.delete('/remove-photo/:id',authMiddleware, MemberController.removeP
 memberRouter.post("/login", MemberController.memberLogin);
 memberRouter.delete("/delete/:id", MemberController.deleteMember);
 memberRouter.patch('/:id/ring-color',authMiddleware,MemberController.updateRingColor);
+memberRouter.patch("/:id/toggle-status", MemberController.toggleMemberStatus);
 
 export default memberRouter;

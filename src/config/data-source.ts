@@ -6,6 +6,7 @@ import { Member } from "../entity/Member";
 import { Project } from "../entity/Project";
 import { ProjectAssignment } from "../entity/ProjectAssignment";
 import { GoogleToken } from "../entity/GoogleToken";
+import { Package } from "../entity/Package";
 
 
 export const AppDataSource = new DataSource({
@@ -17,7 +18,7 @@ export const AppDataSource = new DataSource({
     database: process.env.DB_DATABASE,
     synchronize: true,
     logging: false,
-    entities: [Company, Member, Project, ProjectAssignment, GoogleToken],
+    entities: [Company, Member, Project, ProjectAssignment, GoogleToken, Package],
     migrations: [],
     subscribers: [],
     // ssl: {

@@ -1,0 +1,1 @@
+export const MAX_MEMBER_PER_COMPANY=20
