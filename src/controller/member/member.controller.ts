@@ -1,15 +1,14 @@
 import { Request, Response } from "express";
 import { AppDataSource } from "../../config/data-source";
-import { Member, MemberRole } from "../../entity/Member";
+import { Member } from "../../entity/Member";
 import { Company } from "../../entity/Company";
-import { IAvailableMemberResponse, IConflict, ICreateMemberRequest, ICreateMemberResponse, IGetAvailableMembersRequest, IGetMembersByCompanyRequest, IGetMembersByCompanyResponse, IMemberResponse, IToggleMemberStatusResponse, IUpdateMemberRequest, IUpdateMemberResponse, IUpdateRingColorRequest, IUpdateRingColorResponse } from "./types";
+import { Role } from "../../entity/Role";
+import { IAvailableMemberResponse, IConflict, ICreateMemberRequest, ICreateMemberResponse, IGetAvailableMembersRequest, IGetMembersByCompanyRequest, IGetMembersByCompanyResponse, IGetMembersWithProjectsRequest, IGetMembersWithProjectsResponse, IMemberResponse, IMemberWithProjectsResponse, IToggleMemberStatusResponse, IUpdateMemberRequest, IUpdateMemberResponse, IUpdateRingColorRequest, IUpdateRingColorResponse } from "./types";
 import bcrypt from "bcryptjs";
-import { sendNewMemberEmail, transporter, sendEmail } from "../../utils/mailer";
 import jwt from "jsonwebtoken";
 import { deleteFromS3, uploadToS3 } from "../../utils/s3upload";
 import { MAX_MEMBER_PER_COMPANY } from "../../constants/constant";
 import { generatePassword } from "../../helper/helper";
-
 
 
 const memberRepo = AppDataSource.getRepository(Member);
@@ -21,22 +20,17 @@ class MemberController {
     res: Response<ICreateMemberResponse>
   ) => {
     try {
-      const { name, email, role, companyId } = req.body;
-
-      const roles: MemberRole[] = [
-        "Project Manager",
-        "Creative Director",
-        "Lead Photographer",
-        "Photographer",
-        "Videographer",
-        "Editor",
-        "Assistant",
-        "Other"
-      ];
-
-      if (!roles.includes(role as MemberRole)) {
-        return res.status(400).json({ success: false, message: "Invalid role" });
-      }
+      const {
+        name,
+        email,
+        roleId,
+        companyId,
+        countryCode,
+        phone,
+        location,
+        bio,
+        skills
+      } = req.body;
 
       const company = await AppDataSource.getRepository(Company).findOneBy({ id: companyId });
       if (!company) return res.status(404).json({ success: false, message: "Company not found" });
@@ -56,23 +50,45 @@ class MemberController {
       const existing = await memberRepo.findOneBy({ email });
       if (existing) return res.status(400).json({ success: false, message: "Email already exists" });
 
+      // Find the role entity by ID (not name)
+      const roleRepo = AppDataSource.getRepository(Role);
+      const roleEntity = await roleRepo.findOne({
+        where: { id: roleId, company: { id: companyId } } // Also verify role belongs to company
+      });
+
+
+      if (!roleEntity) {
+        return res.status(400).json({
+          success: false,
+          message: "Role not found or doesn't belong to your company"
+        });
+      }
+
       const rawPassword = generatePassword(6);
       const passwordHash = await bcrypt.hash(rawPassword, 10);
       const member = memberRepo.create({
         name,
         email,
-        role,
+        role: roleEntity, // Store the role entity
         passwordHash,
-        company: { id: companyId }, // store only FK
+        company: { id: companyId },
+        countryCode: countryCode || null,
+        phone: phone || null,
+        location: location || null,
+        bio: bio || null,
+        skills: skills || [], // Default to empty array if not provided
       });
 
       await memberRepo.save(member);
-      if (process.env.SMTP_EMAIL) {
-        await sendNewMemberEmail(email, name, rawPassword);
-      }
-      // TODO: generate invite token & send email
+      // if (process.env.SMTP_EMAIL) {
+      //   await sendNewMemberEmail(email, name, rawPassword);
+      // }
 
-      return res.status(201).json({ success: true, message: "Member Created Successfully", member });
+      return res.status(201).json({
+        success: true,
+        message: "Member Created Successfully",
+        member
+      });
     } catch (err) {
       console.error(err);
       return res.status(500).json({ success: false, message: "Server error" });
@@ -149,31 +165,41 @@ class MemberController {
       };
 
       // If memberId is provided, filter for that specific member
-      if (memberId) {
-        whereCondition.id = memberId;
-      }
+      // if (memberId) {
+      //   whereCondition.id = memberId;
+      // }
 
       const members = await memberRepo.find({
         where: whereCondition,
         relations: [
+          "role",
           "assignments",
+          "assignments.role",
           "assignments.project"
         ],
         select: {
           id: true,
           name: true,
           email: true,
-          role: true,
+          role: {
+            id: true,
+            name: true
+          },
           bio: true,
           profilePhoto: true,
           location: true,
           phone: true,
+          countryCode: true,
           skills: true,
           ringColor: true,
-          active:true,
+          active: true,
+          isAdmin:true,
           assignments: {
             id: true,
-            role: true,
+            role: {
+              id: true,
+              name: true
+            },
             project: {
               id: true,
               name: true,
@@ -204,9 +230,7 @@ class MemberController {
       }
 
       // Format the response with proper type conversion and date filtering
-      const membersResponse: IMemberResponse[] = members.map(member => {
-
-
+      let membersResponse: IMemberResponse[] = members.map(member => {
         // Filter assignments to only include projects that fall within the requested date range
         const filteredAssignments = member.assignments?.filter(assignment => {
           const project = assignment.project;
@@ -221,12 +245,6 @@ class MemberController {
           const projectEndDate = project.endDate;
 
           // Check if project overlaps with the requested date range
-          // Project overlaps if:
-          // 1. Project starts in the date range OR
-          // 2. Project ends in the date range OR  
-          // 3. Project spans the entire date range (starts before and ends after)
-          // 4. Project is ongoing during the date range
-
           const startsInRange = projectStartDate &&
             projectStartDate >= startDate &&
             projectStartDate <= endDate;
@@ -252,13 +270,16 @@ class MemberController {
           id: member.id,
           name: member.name,
           email: member.email,
-          role: member.role,
+          role: member.role?.name || 'No Role Assigned',
+          roleId: member.role?.id || "",
           phone: member.phone || '',
+          countryCode: member.countryCode || '',
           location: member.location || '',
           bio: member.bio || '',
           profilePhoto: member.profilePhoto || '',
           ringColor: member.ringColor || '',
           active: member.active,
+          isAdmin:member.isAdmin,
           skills: member.skills || [],
           companyId: companyId,
           projects: filteredAssignments.map(assignment => {
@@ -274,13 +295,25 @@ class MemberController {
               location: assignment.project.location,
               description: assignment.project.description,
               client: assignment.project.client,
-              newRole: assignment.role,
+              newRole: assignment.role?.name || "",
+              roleId: assignment.role?.id || "",
               brief: assignment.project.brief,
               logistics: assignment.project.logistics
             };
           })
         };
       });
+
+      // If memberId is provided, sort to put that member first
+      if (memberId) {
+        membersResponse = membersResponse.sort((a, b) => {
+          // Put the requested member at the top
+          if (a.id === memberId) return -1;
+          if (b.id === memberId) return 1;
+          return 0;
+        });
+      }
+
       // Prepare response metadata based on view type
       const responseMetadata = viewType === 'month'
         ? { month, year }
@@ -306,6 +339,200 @@ class MemberController {
       return res.status(500).json({
         success: false,
         message: "Server error while fetching members"
+      });
+    }
+  };
+
+  public getMembersWithCurrentFutureProjects = async (
+    req: Request<{}, {}, IGetMembersWithProjectsRequest>,
+    res: Response<IGetMembersWithProjectsResponse>
+  ) => {
+    try {
+      const { companyId, memberId } = req.body;
+
+      if (!companyId) {
+        return res.status(400).json({
+          success: false,
+          message: "Company ID is required"
+        });
+      }
+
+      const company = await companyRepo.findOneBy({ id: companyId });
+      if (!company) {
+        return res.status(404).json({
+          success: false,
+          message: "Company not found"
+        });
+      }
+
+      // Get current date in YYYY-MM-DD format
+      const currentDate = new Date().toISOString().split('T')[0];
+
+      // Build where condition based on whether memberId is provided
+      const whereCondition: any = {
+        company: { id: companyId }
+      };
+
+      // If memberId is provided, filter for that specific member
+      if (memberId) {
+        whereCondition.id = memberId;
+      }
+
+      const members = await memberRepo.find({
+        where: whereCondition,
+        relations: [
+          "role",
+          "assignments",
+          "assignments.role",
+          "assignments.project"
+        ],
+        select: {
+          id: true,
+          name: true,
+          email: true,
+          role: {
+            id: true,
+            name: true
+          },
+          bio: true,
+          profilePhoto: true,
+          location: true,
+          phone: true,
+          countryCode: true,
+          skills: true,
+          ringColor: true,
+          active: true,
+          assignments: {
+            id: true,
+            role: {
+              id: true,
+              name: true
+            },
+            project: {
+              id: true,
+              name: true,
+              color: true,
+              startDate: true,
+              endDate: true,
+              startHour: true,
+              endHour: true,
+              location: true,
+              description: true,
+              client: true,
+              brief: true,
+              logistics: true
+            }
+          }
+        },
+        order: {
+          createdAt: "DESC"
+        }
+      });
+
+      // If memberId was provided but no member found, return error
+      if (memberId && members.length === 0) {
+        return res.status(404).json({
+          success: false,
+          message: "Member not found in this company"
+        });
+      }
+
+      // Format the response with proper type conversion and date filtering
+      const membersResponse: any[] = members.map(member => {
+        // Filter assignments to only include current and future projects
+        const filteredAssignments = member.assignments?.filter(assignment => {
+          const project = assignment.project;
+
+          // If project has no end date, include it (considered ongoing)
+          if (!project.endDate) {
+            return true;
+          }
+
+          // If project has end date, check if it's current or future
+          // Current: endDate >= currentDate
+          // Future: startDate > currentDate (but we'll include anything that hasn't ended yet)
+          const projectEndDate = project.endDate;
+
+          // Include projects that haven't ended yet (endDate is today or in future)
+          return projectEndDate >= currentDate;
+        }) || [];
+
+        return {
+          id: member.id,
+          name: member.name,
+          email: member.email,
+          role: member.role?.name || 'No Role Assigned',
+          roleId: member.role?.id || "",
+          phone: member.phone || '',
+          countryCode: member.countryCode || '',
+          location: member.location || '',
+          bio: member.bio || '',
+          profilePhoto: member.profilePhoto || '',
+          ringColor: member.ringColor || '',
+          active: member.active,
+          skills: member.skills || [],
+          companyId: companyId,
+          projects: filteredAssignments.map(assignment => {
+            // Determine project status
+            let status: 'current' | 'upcoming' = 'current';
+            const projectStartDate = assignment.project.startDate;
+
+            if (projectStartDate && projectStartDate > currentDate) {
+              status = 'upcoming';
+            }
+
+            return {
+              id: assignment.project.id,
+              name: assignment.project.name,
+              startDate: assignment.project.startDate,
+              endDate: assignment.project.endDate,
+              color: assignment.project.color,
+              assignedTo: member.name,
+              startHour: assignment.project.startHour,
+              endHour: assignment.project.endHour,
+              location: assignment.project.location,
+              description: assignment.project.description,
+              client: assignment.project.client,
+              newRole: assignment.role?.name || "",
+              roleId: assignment.role?.id || "",
+              brief: assignment.project.brief,
+              logistics: assignment.project.logistics,
+              status: status // Add status to indicate if it's current or upcoming
+            };
+          })
+        };
+      });
+
+      // Calculate summary statistics
+      const totalMembers = membersResponse.length;
+      const totalProjects = membersResponse.reduce((sum, member) => sum + member.projects.length, 0);
+      const currentProjects = membersResponse.reduce((sum, member) =>
+        sum + member.projects.filter(p => p.status === 'current').length, 0
+      );
+      const upcomingProjects = membersResponse.reduce((sum, member) =>
+        sum + member.projects.filter(p => p.status === 'upcoming').length, 0
+      );
+
+      return res.status(200).json({
+        success: true,
+        message: memberId
+          ? `Member with current and future projects retrieved successfully`
+          : `Members with current and future projects retrieved successfully`,
+        members: membersResponse,
+        totalCount: totalMembers,
+        summary: {
+          totalProjects,
+          currentProjects,
+          upcomingProjects,
+          asOfDate: currentDate
+        }
+      });
+
+    } catch (err) {
+      console.error("Error fetching members with projects:", err);
+      return res.status(500).json({
+        success: false,
+        message: "Server error while fetching members with projects"
       });
     }
   };
@@ -339,10 +566,8 @@ class MemberController {
   ) => {
     try {
       const { id: memberId } = req.params;
-      const { name, email, role, phone, location, bio, skills, profilePhoto } = req.body;
-      // const file = req.file;
+      const { name, email, role, phone, countryCode, location, bio, skills, profilePhoto, roleId } = req.body; // Add countryCode
       const companyId = res.locals.token?.companyId;
-      const memberid = res.locals.token?.memberId;
 
       // Handle skills array from form-data
       let skillsArray: string[] = [];
@@ -358,15 +583,13 @@ class MemberController {
         }
       }
 
-
-
-
       // Update validation to include new fields
       if (
         name === undefined &&
         email === undefined &&
         role === undefined &&
         phone === undefined &&
+        countryCode === undefined && // Add this line
         location === undefined &&
         bio === undefined &&
         skills === undefined &&
@@ -374,46 +597,13 @@ class MemberController {
       ) {
         return res.status(400).json({
           success: false,
-          message:
-            "At least one field (name, email, role, phone, country, location, bio, skills, or profilePhoto) must be provided for update"
+          message: "At least one field must be provided for update"
         });
-      }
-
-
-      // Phone number validation
-      // if (phone) {
-      //   const phoneRegex = /^[\+]?[1-9][\d]{0,15}$/;
-      //   if (!phoneRegex.test(phone)) {
-      //     return res.status(400).json({
-      //       success: false,
-      //       message: "Invalid phone number format"
-      //     });
-      //   }
-      // }
-
-      if (role) {
-        const validRoles: MemberRole[] = [
-          "Project Manager",
-          "Creative Director",
-          "Lead Photographer",
-          "Photographer",
-          "Videographer",
-          "Editor",
-          "Assistant",
-          "Other",
-        ];
-
-        if (!validRoles.includes(role as MemberRole)) {
-          return res.status(400).json({
-            success: false,
-            message: "Invalid role"
-          });
-        }
       }
 
       const member = await memberRepo.findOne({
         where: { id: memberId },
-        relations: ["company"]
+        relations: ["company", "role"] // Include role relation
       });
 
       if (!member) {
@@ -423,53 +613,49 @@ class MemberController {
         });
       }
 
-      if (member.company.id !== companyId && !memberId) {
-        return res.status(403).json({
-          success: false,
-          message: "You can only update members from your own company"
-        });
-      }
 
-      // Handle profile photo upload if provided
-      // if (file) {
-      //   const bucketName = process.env.AWS_S3_BUCKET_NAME;
-
-      //   if (bucketName) {
-      //     // Generate filename: image_name + current_time + original extension
-      //     const timestamp = Date.now();
-      //     const extension = file.originalname.split('.').pop();
-      //     const baseName = file.originalname.split('.').slice(0, -1).join('.').replace(/[^a-zA-Z0-9]/g, '_');
-      //     const fileName = `${baseName}_${timestamp}.${extension}`;
-      //     const fileKey = `images/${fileName}`;
-
-      //     const uploadResult = await uploadToS3({
-      //       bucketName,
-      //       key: fileKey,
-      //       body: file.buffer,
-      //       contentType: file.mimetype, // Dynamic content type
-      //       metadata: {
-      //         originalName: file.originalname,
-      //         memberId: memberId,
-      //         uploadedAt: new Date().toISOString()
-      //       }
-      //     });
-
-      //     if (uploadResult.success) {
-      //       member.profilePhoto = fileKey; // Store just the path, not full URL
-      //     }
-      //   }
-      // }
 
       // Update fields if provided
       if (name !== undefined) member.name = name;
-      if (role !== undefined) member.role = role;
+      if (email !== undefined) member.email = email;
+      if (countryCode !== undefined) member.countryCode = countryCode; // Add this line
+
+      if (role !== undefined  && roleId !== null) {
+        // Find the role entity by ID (not name)
+        const roleRepo = AppDataSource.getRepository(Role);
+        const roleEntity = await roleRepo.findOne({
+          where: { id: roleId, company: { id: companyId } } // Verify role belongs to company
+        });
+
+        if (!roleEntity) {
+          return res.status(400).json({
+            success: false,
+            message: "Role not found or doesn't belong to your company"
+          });
+        }
+        member.role = roleEntity;
+      }
+
       if (phone !== undefined) member.phone = phone;
       if (location !== undefined) member.location = location;
       if (bio !== undefined) member.bio = bio;
       if (skills !== undefined) member.skills = skillsArray;
       if (profilePhoto !== undefined) member.profilePhoto = profilePhoto;
 
-      const updatedMember = await memberRepo.save(member);
+      await memberRepo.save(member);
+
+      // Fetch the updated member with all relations to ensure complete data
+      const updatedMember = await memberRepo.findOne({
+        where: { id: memberId },
+        relations: ["company", "role"] // Include role relation to get complete role data
+      });
+
+      if (!updatedMember) {
+        return res.status(404).json({
+          success: false,
+          message: "Member not found after update"
+        });
+      }
 
       return res.status(200).json({
         success: true,
@@ -554,13 +740,6 @@ class MemberController {
         });
       }
 
-      // Check if member belongs to the company
-      if (member.company.id !== companyId) {
-        return res.status(403).json({
-          success: false,
-          message: "You can only update members from your own company"
-        });
-      }
 
       // Check if member has a profile photo
       if (!member.profilePhoto) {
@@ -601,24 +780,41 @@ class MemberController {
     }
   };
   public memberLogin = async (req: Request, res: Response) => {
-    const { email, password, rememberMe } = req.body;
+    const { email, password, rememberMe, userType } = req.body;
 
     try {
+      const memberRepo = AppDataSource.getRepository(Member);
+
       const member = await memberRepo.findOne({
         where: { email },
-        relations: ['company'], // if needed
+        relations: ['company', 'role'],
       });
 
       if (!member) {
-        return res.status(404).json({ success: false, message: "Member not found" });
+        return res.status(404).json({ success: false, message: "Invalid credentials" });
       }
 
+      // Validate user type based on isAdmin status
+      if (userType === "company" && !member.isAdmin) {
+        return res.status(403).json({ 
+          success: false, 
+          message: "Member cannot login as company" 
+        });
+      }
+
+      if (userType === "member" && member.isAdmin) {
+        return res.status(403).json({ 
+          success: false, 
+          message: "Admin cannot login as member" 
+        });
+      }
       const isMatch = await bcrypt.compare(password, member.passwordHash || "");
       if (!isMatch) {
         return res.status(401).json({ success: false, message: "Invalid credentials" });
       }
+       
 
-      // Now check if password reset is forced only if credentials are valid
+      // Force password reset flow
       if (!member.isMemberPassword) {
         return res.status(403).json({
           success: false,
@@ -627,25 +823,43 @@ class MemberController {
         });
       }
 
-      // Continue login logic (JWT token generation, etc.)
+      // Create JWT with user type based on isAdmin
+      const type = member.isAdmin ? "admin" : "member";
+
       const token = jwt.sign(
-        { memberId: member.id, email: member.email },
-        process.env.JWT_SECRET!,
         {
-          expiresIn: rememberMe ? "30d" : "1d",
-        }
+          memberId: member.id,
+          companyId: member.company?.id,
+          userType: type,
+          isAdmin: member.isAdmin ?? false
+        },
+        process.env.JWT_SECRET!,
+        { expiresIn: rememberMe ? "30d" : "1d" }
       );
 
-      const memberDetails = {
+      // Build unified user response
+      const userData = {
         id: member.id,
         name: member.name,
         email: member.email,
-        location: member.location,
-        company: member.company,
-        country: member.company.country,
+        role: member.role ? member.role.name : null,
+        isAdmin: member.isAdmin ?? false,
+        userType: type,
+        location: member.location ?? null,
+        company: {
+          id: member.company?.id ?? null,
+          name: member.company?.name ?? null,
+          email: member.email, // Using member email for compatibility
+          country: member.company?.country ?? null,
+        }
       };
 
-      return res.status(200).json({ success: true, message: "Login successful", member: memberDetails, token });
+      return res.status(200).json({
+        success: true,
+        message: "Login successful",
+        token,
+        user: userData
+      });
     } catch (error) {
       console.error(error);
       return res.status(500).json({ success: false, message: "Server error" });
@@ -764,20 +978,27 @@ class MemberController {
         where: {
           company: { id: companyId },
         },
-        relations: ["assignments", "assignments.project"],
+        relations: ["role", "assignments", "assignments.role", "assignments.project"],
         select: {
           id: true,
           profilePhoto: true,
           name: true,
           email: true,
-          role: true,
+          role: {
+            id: true,
+            name: true
+          },
           bio: true,
           location: true,
           phone: true,
+          countryCode: true, // Add this line
           skills: true,
           assignments: {
             id: true,
-            role: true,
+            role: {
+              id: true,
+              name: true
+            },
             project: {
               id: true,
               name: true,
@@ -868,8 +1089,9 @@ class MemberController {
             profilePhoto: member.profilePhoto,
             name: member.name,
             email: member.email,
-            role: member.role,
+            role: member.role?.name || "",
             phone: member.phone || "",
+            countryCode: member.countryCode || "", // Add this line
             location: member.location || "",
             bio: member.bio || "",
             skills: member.skills || [],
@@ -882,8 +1104,9 @@ class MemberController {
             profilePhoto: member.profilePhoto,
             name: member.name,
             email: member.email,
-            role: member.role,
+            role: member.role?.name || "",
             phone: member.phone || "",
+            countryCode: member.countryCode || "", // Add this line
             location: member.location || "",
             bio: member.bio || "",
             skills: member.skills || [],
@@ -896,8 +1119,9 @@ class MemberController {
             profilePhoto: member.profilePhoto,
             name: member.name,
             email: member.email,
-            role: member.role,
+            role: member.role?.name || "",
             phone: member.phone || "",
+            countryCode: member.countryCode || "", // Add this line
             location: member.location || "",
             bio: member.bio || "",
             skills: member.skills || [],
@@ -1041,13 +1265,6 @@ class MemberController {
         });
       }
 
-      // Verify member belongs to the company
-      if (member.company.id !== companyId) {
-        return res.status(403).json({
-          success: false,
-          message: "You can only update ring color for members from your own company"
-        });
-      }
 
       // Update ring color
       member.ringColor = ringColor;
@@ -1071,69 +1288,69 @@ class MemberController {
   };
 
   public toggleMemberStatus = async (
-  req: Request<{ id: string }>,
-  res: Response<IToggleMemberStatusResponse>
-) => {
-  try {
-    const { id: memberId } = req.params;
-    const companyId = res.locals.token?.companyId;
+    req: Request<{ id: string }>,
+    res: Response<IToggleMemberStatusResponse>
+  ) => {
+    try {
+      const { id: memberId } = req.params;
+      const companyId = res.locals.token?.companyId;
 
-    if (!memberId) {
-      return res.status(400).json({
+      if (!memberId) {
+        return res.status(400).json({
+          success: false,
+          message: "Member ID is required",
+          newStatus: false
+        });
+      }
+
+      // Find member with company relation
+      const member = await memberRepo.findOne({
+        where: { id: memberId },
+        relations: ["company"]
+      });
+
+      if (!member) {
+        return res.status(404).json({
+          success: false,
+          message: "Member not found",
+          newStatus: false
+        });
+      }
+
+      // Verify member belongs to the company
+      // if (member.company.id !== companyId) {
+      //   return res.status(403).json({
+      //     success: false,
+      //     message: "You can only toggle status for members from your own company",
+      //     newStatus: member.active
+      //   });
+      // }
+
+      // Toggle the active status
+      const newStatus = !member.active;
+      member.active = newStatus;
+      member.updatedAt = new Date();
+
+      const updatedMember = await memberRepo.save(member);
+
+      const statusMessage = newStatus ? "activated" : "deactivated";
+
+      return res.status(200).json({
+        success: true,
+        message: `Member ${statusMessage} successfully`,
+        member: updatedMember,
+        newStatus
+      });
+
+    } catch (err) {
+      console.error("Error toggling member status:", err);
+      return res.status(500).json({
         success: false,
-        message: "Member ID is required",
+        message: "Server error while toggling member status",
         newStatus: false
       });
     }
-
-    // Find member with company relation
-    const member = await memberRepo.findOne({
-      where: { id: memberId },
-      relations: ["company"]
-    });
-
-    if (!member) {
-      return res.status(404).json({
-        success: false,
-        message: "Member not found",
-        newStatus: false
-      });
-    }
-
-    // Verify member belongs to the company
-    // if (member.company.id !== companyId) {
-    //   return res.status(403).json({
-    //     success: false,
-    //     message: "You can only toggle status for members from your own company",
-    //     newStatus: member.active
-    //   });
-    // }
-
-    // Toggle the active status
-    const newStatus = !member.active;
-    member.active = newStatus;
-    member.updatedAt = new Date();
-
-    const updatedMember = await memberRepo.save(member);
-
-    const statusMessage = newStatus ? "activated" : "deactivated";
-
-    return res.status(200).json({
-      success: true,
-      message: `Member ${statusMessage} successfully`,
-      member: updatedMember,
-      newStatus
-    });
-
-  } catch (err) {
-    console.error("Error toggling member status:", err);
-    return res.status(500).json({
-      success: false,
-      message: "Server error while toggling member status",
-      newStatus: false
-    });
-  }
-};
+  };
 }
 
 

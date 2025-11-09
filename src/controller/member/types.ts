@@ -1,10 +1,15 @@
-import { Member, MemberRole } from "../../entity/Member";
+import { Member } from "../../entity/Member";
 
 export interface ICreateMemberRequest {
   name: string;
   email: string;
-  role: MemberRole;
+  roleId: string;
   companyId: string;
+  countryCode:string;
+  phone:string;
+  location?:string;
+  bio?:string;
+  skills?:string[];
 }
 export interface ICreateMemberResponse {
   success: Boolean;
@@ -62,12 +67,14 @@ export interface IGetMembersByCompanyResponse {
 export interface IUpdateMemberRequest {
   name?: string;
   email?: string;
-  role?: MemberRole;
+  role?: string;
   phone?: string | null;
+  countryCode?: string | null;
   location?: string | null;
   bio?: string | null;
   skills?: string[];
   profilePhoto?: string | null;
+  roleId?: string;
 }
 
 export interface IUpdateMemberResponse {
@@ -102,6 +109,7 @@ export interface IAvailableMemberResponse {
   email: string;
   role: string;
   phone: string;
+  countryCode: string;
   location: string;
   bio: string;
   skills: string[];
@@ -124,4 +132,59 @@ export interface IToggleMemberStatusResponse {
   message: string;
   member?: Member;
   newStatus: boolean;
+}
+
+export interface IGetMembersWithProjectsRequest {
+  companyId: string;
+  memberId?: string;
+}
+
+export interface IGetMembersWithProjectsResponse {
+  success: boolean;
+  message: string;
+  members?: IMemberWithProjectsResponse[];
+  totalCount?: number;
+  summary?: {
+    totalProjects: number;
+    currentProjects: number;
+    upcomingProjects: number;
+    asOfDate: string;
+  };
+}
+
+export interface IMemberWithProjectsResponse {
+  id: string;
+  name: string;
+  email: string;
+  role: string;
+  roleId: string;
+  phone: string;
+  countryCode: string;
+  location: string;
+  bio: string;
+  profilePhoto: string;
+  ringColor: string;
+  active: boolean;
+  skills: string[];
+  companyId: string;
+  projects: IProjectWithStatusResponse[];
+}
+
+export interface IProjectWithStatusResponse {
+  id: string;
+  name: string;
+  startDate: string | null;
+  endDate: string | null;
+  color: string;
+  assignedTo: string;
+  startHour: string | null;
+  endHour: string | null;
+  location: string | null;
+  description: string | null;
+  client: string | null;
+  newRole: string;
+  roleId: string;
+  brief: string | null;
+  logistics: string | null;
+  status: 'current' | 'upcoming';
 }

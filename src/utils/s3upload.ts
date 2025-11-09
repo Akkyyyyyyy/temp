@@ -34,6 +34,9 @@ export const upload = multer({
       'text/plain',
       'application/msword',
       'application/vnd.openxmlformats-officedocument.wordprocessingml.document',
+      'video/mp4',
+      'video/mpeg',
+      'video/quicktime'
     ];
     if (allowedMimes.includes(file.mimetype)) cb(null, true);
     else cb(new Error('Invalid file type. Only images and documents are allowed.'));

@@ -8,8 +8,9 @@ import {
   UpdateDateColumn,
   JoinColumn,
 } from "typeorm";
-import { Member, MemberRole } from "./Member";
+import { Member } from "./Member";
 import { Project } from "./Project";
+import { Role } from "./Role";
 
 @Entity()
 export class ProjectAssignment {
@@ -24,11 +25,12 @@ export class ProjectAssignment {
   @JoinColumn()
   member: Member;
 
-  @Column({
-    type: "enum",
-    enum: ["Project Manager", "Creative Director", "Lead Photographer", "Photographer", "Videographer", "Editor", "Assistant", "Other"],
-  })
-  role: MemberRole;
+  @ManyToOne(() => Role, (role) => role.assignments, { onDelete: "RESTRICT" })
+  @JoinColumn()
+  role: Role;
+
+  @Column({ type: "text", nullable: true })
+  instructions: string;
 
   @Column({ nullable: true })
   googleEventId: string;

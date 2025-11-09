@@ -1,15 +1,15 @@
 import { Member } from "../../entity/Member";
-import { PackageStatus } from "../../entity/Package";
+import { Package, PackageStatus } from "../../entity/Package";
 
 
 export interface ICreatePackageRequest {
   name: string;
   price: number;
   duration: string;
-  isPopular: boolean;
-  features?: Record<string, any> | null;
+  isPopular?: boolean;
+  features?: string[] | null;
   addons?: Record<string, any> | null;
-  status: PackageStatus;
+  status: "active" | "inactive";
   memberId: string;
 }
 
@@ -18,41 +18,17 @@ export interface IUpdatePackageRequest {
   price?: number;
   duration?: string;
   isPopular?: boolean;
-  features?: Record<string, any> | null;
+  features?: string[] | null;
   addons?: Record<string, any> | null;
-  status?: PackageStatus;
+  status?: "active" | "inactive";
 }
 
 export interface IPackageResponse {
   message: string;
-  package?: {
-    id: string;
-    name: string;
-    price: number;
-    duration: string;
-    isPopular: boolean;
-    features: Record<string, any> | null;
-    addons: Record<string, any> | null;
-    status: PackageStatus;
-    member: Member;
-    createdAt: Date;
-    updatedAt: Date;
-  };
+  package?: Package;
 }
 
 export interface IPackageListResponse {
   message: string;
-  packages: {
-    id: string;
-    name: string;
-    price: number;
-    duration: string;
-    isPopular: boolean;
-    features: Record<string, any> | null;
-    addons: Record<string, any> | null;
-    status: PackageStatus;
-    member: Member;
-    createdAt: Date;
-    updatedAt: Date;
-  }[];
+  packages: Package[];
 }

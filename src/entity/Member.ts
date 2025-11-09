@@ -6,13 +6,13 @@ import {
   OneToMany,
   CreateDateColumn,
   UpdateDateColumn,
+  JoinColumn,
 } from "typeorm";
 import { Company } from "./Company";
 import { ProjectAssignment } from "./ProjectAssignment";
 import { GoogleToken } from "./GoogleToken";
 import { Package } from "./Package";
-
-export type MemberRole = "Project Manager" | "Creative Director" | "Lead Photographer" | "Photographer" | "Videographer" | "Editor" | "Assistant" | "Other";
+import { Role } from "./Role";
 
 export interface IMember {
   id: string; // UUID
@@ -26,9 +26,11 @@ export interface IMember {
   skills?: string[];
   passwordHash?: string | null;
   isMemberPassword?: boolean;
-  role: MemberRole;
+  role?: Role | null;
+  isAdmin: boolean;
   company: Company;
   assignments?: ProjectAssignment[];
+  countryCode: string;
   createdAt: Date;
   updatedAt: Date;
   ringColor?: string | null;
@@ -47,6 +49,9 @@ export class Member implements IMember {
 
   @Column({ nullable: true })
   phone: string;
+
+  @Column({ nullable: true })
+  countryCode: string;
 
   @Column({ nullable: true })
   profilePhoto: string;
@@ -75,11 +80,12 @@ export class Member implements IMember {
   @Column({ default: true })
   active: boolean;
 
-  @Column({
-    type: "enum",
-    enum: ["Project Manager", "Creative Director", "Lead Photographer", "Photographer", "Videographer", "Editor", "Assistant", "Other"]
-  })
-  role: MemberRole;
+  @ManyToOne(() => Role, (role) => role.members, { onDelete: "RESTRICT", nullable: true })
+  @JoinColumn()
+  role?: Role | null;
+
+  @Column({ default: false })
+  isAdmin: boolean;
 
   @ManyToOne(() => Company, (company) => company.members, { onDelete: "CASCADE" })
   company: Company;

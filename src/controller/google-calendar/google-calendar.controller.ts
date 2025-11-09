@@ -224,7 +224,7 @@ class GoogleCalendarController {
             success: result.success,
             message: result.message,
             googleEventId: result.eventId,
-            role: assignment.role
+            role: assignment.role.name
           });
 
         } catch (error: any) {
@@ -241,7 +241,7 @@ class GoogleCalendarController {
 
       return res.status(200).json({
         success: true,
-        message: `Sync completed: ${synced} successful, ${failed} failed`,
+        message: `Sync completed`,
         synced,
         failed,
         results
@@ -345,7 +345,7 @@ class GoogleCalendarController {
         client: assignment.project.client,
         brief: assignment.project.brief,
         logistics: assignment.project.logistics,
-        assignmentRole: assignment.role,
+        assignmentRole: assignment.role.name,
         assignedAt: assignment.createdAt.toISOString()
       })) || [];
 

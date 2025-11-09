@@ -15,6 +15,12 @@ export interface IClient {
   name?: string;
   mobile?: string;
   email?: string;
+  cc?: string;
+}
+
+export interface IDocument {
+  title: string;
+  filename: string;
 }
 
 export interface IProject {
@@ -27,11 +33,13 @@ export interface IProject {
   endHour: number;
   location: string;
   description?: string | null;
-  client?: IClient | null;  // Add client field
-  company: Company
+  client?: IClient | null;
+  documents?: IDocument[];
+  company: Company;
   createdAt: Date;
   updatedAt: Date;
 }
+
 // Use a more flexible content type that can handle any structure
 export type ContentType = string | string[] | any[];
 
@@ -39,10 +47,16 @@ export interface IProjectSection {
   id: string;
   type: 'text' | 'list' | 'nested' | 'item' | 'checklist';
   title: string;
-  content: ContentType; // Use the flexible type
+  content: ContentType;
   order: number;
 }
 
+export interface IChecklistItem {
+  id?: string;
+  title: string;
+  completed: boolean;
+  description?: string;
+}
 
 @Entity()
 export class Project implements IProject {
@@ -77,10 +91,19 @@ export class Project implements IProject {
   client: IClient;
 
   @Column({ type: "json", nullable: true })
+  documents: IDocument[];
+
+  @Column({ type: "json", nullable: true })
   brief?: IProjectSection[];
 
   @Column({ type: "json", nullable: true })
-  logistics?: IProjectSection[]; 
+  logistics?: IProjectSection[];
+
+  @Column({ type: "json", nullable: true })
+  checklist?: IChecklistItem[];
+
+  @Column({ type: "json", nullable: true })
+  equipments: IProjectSection[];
 
   @ManyToOne(() => Company, (company) => company.projects, { onDelete: "CASCADE" })
   company: Company;

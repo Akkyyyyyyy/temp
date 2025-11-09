@@ -5,6 +5,7 @@ import { Company } from "../../entity/Company";
 import bcrypt from "bcryptjs";
 import jwt from "jsonwebtoken";
 import { transporter } from "../../utils/mailer";
+import { Member } from "../../entity/Member";
 
 
 class CompanyController {
@@ -21,7 +22,8 @@ class CompanyController {
                 return;
             }
             const companyRepo = AppDataSource.getRepository(Company);
-            const existing = await companyRepo.findOne({ where: { email } });
+            const memberRepo = AppDataSource.getRepository(Member);
+            const existing = await memberRepo.findOne({ where: { email } });
             if (existing) {
                 res.status(409).json({ message: "Email already in use" });
                 return;
@@ -36,6 +38,17 @@ class CompanyController {
             });
 
             await companyRepo.save(newCompany);
+            const adminName = name + " Admin"
+
+            const adminMember = memberRepo.create({
+                name: adminName,
+                email,
+                passwordHash,
+                company: newCompany,
+                isAdmin: true,
+                isMemberPassword: true,
+            });
+            await memberRepo.save(adminMember);
             return res.status(201).json({ message: "Company registered successfully", });
         } catch (error) {
             console.error(error);

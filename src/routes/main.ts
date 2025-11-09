@@ -5,6 +5,7 @@ import projectRouter from "./ProjectRoute";
 import googleCalendarRouter from "./google-calendarRoutes";
 import forgotPasswordRouter from "./ForgotPasswordRoute";
 import packageRouter from "./PacakageRoute";
+import roleRouter from "./RoleRoute";
 
 
 const mainRouter = express.Router();
@@ -15,6 +16,7 @@ mainRouter.use("/member", memberRouter);
 mainRouter.use("/project", projectRouter);
 mainRouter.use("/calendar", googleCalendarRouter);
 mainRouter.use("/package", packageRouter);
+mainRouter.use("/roles", roleRouter);
 
 
 export default mainRouter;

@@ -43,6 +43,12 @@ class PackageController {
         return;
       }
 
+      // Validate features is an array if provided
+      if (features && !Array.isArray(features)) {
+        res.status(400).json({ message: "Features must be an array" });
+        return;
+      }
+
       // Create new package
       const newPackage = packageRepo.create({
         name,
@@ -143,6 +149,12 @@ class PackageController {
 
       if (!packageItem) {
         res.status(404).json({ message: "Package not found" });
+        return;
+      }
+
+      // Validate features is an array if provided
+      if (updateData.features && !Array.isArray(updateData.features)) {
+        res.status(400).json({ message: "Features must be an array" });
         return;
       }
 

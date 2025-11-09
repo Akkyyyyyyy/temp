@@ -8,6 +8,7 @@ import {
 } from "typeorm";
 import { Member } from "./Member";
 import { Project } from "./Project";
+import { Role } from "./Role";
 
 export interface ICompany {
   id: string;
@@ -16,6 +17,7 @@ export interface ICompany {
   country: string;
   members?: Member[];
   projects?: Project[];
+  roles?: Role[];
   passwordHash: string;
   createdAt: Date;
   updatedAt: Date;
@@ -43,6 +45,9 @@ export class Company implements ICompany {
 
   @OneToMany(() => Project, (project) => project.company)
   projects: Project[];
+
+  @OneToMany(() => Role, (role) => role.company)
+  roles: Role[];
 
   @CreateDateColumn()
   createdAt: Date;

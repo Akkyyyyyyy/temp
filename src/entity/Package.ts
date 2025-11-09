@@ -16,7 +16,7 @@ export interface IPackage {
   price: number;
   duration: string;
   isPopular: boolean;
-  features?: Record<string, any> | null;
+  features?: string[] | null;
   addons?: Record<string, any> | null;
   status: PackageStatus;
   member: Member;
@@ -42,7 +42,7 @@ export class Package implements IPackage {
   isPopular: boolean;
 
   @Column({ type: "json", nullable: true })
-  features: Record<string, any> | null;
+  features: string[] | null;
 
   @Column({ type: "json", nullable: true })
   addons: Record<string, any> | null;

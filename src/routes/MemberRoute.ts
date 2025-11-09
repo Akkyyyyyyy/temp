@@ -7,6 +7,7 @@ const memberRouter = express.Router();
 
 memberRouter.post("/add", authMiddleware, MemberController.createMember);
 memberRouter.post("/by-company", authMiddleware, MemberController.getMembersByCompany);
+memberRouter.post("/getAllFutureProjects", authMiddleware, MemberController.getMembersWithCurrentFutureProjects);
 memberRouter.post('/available', authMiddleware, MemberController.getAvailableMembers);
 memberRouter.put("/update/:id", authMiddleware, MemberController.updateMember);
 memberRouter.put("/update/:id", authMiddleware, formUpload.single('photo'), MemberController.updateMember);

@@ -1,11 +1,10 @@
 // src/modules/project/types.ts
 
-import { MemberRole } from "../../entity/Member";
-import { IClient, IProjectSection, Project } from "../../entity/Project";
+import { IChecklistItem, IClient, IProjectSection, Project } from "../../entity/Project";
 
 export interface IProjectAssignmentInput {
     memberId: string;
-    role: MemberRole;
+    roleId : string;
 }
 
 export interface ICreateProjectRequest {
@@ -52,7 +51,7 @@ export interface IRemoveMemberFromProjectResponse {
 export interface IAddMemberToProjectRequest {
     projectId: string;
     memberId: string;
-    role: string;
+    roleId: string;
 }
 
 export interface IAddMemberToProjectResponse {
@@ -87,6 +86,7 @@ export interface IEditProjectRequest {
         name: string;
         email: string;
         mobile: string;
+        cc:string;
     } | null;
     isScheduleUpdate?: boolean;
 }
@@ -105,4 +105,89 @@ export interface IDeleteProjectRequest {
 export interface IDeleteProjectResponse {
     success: boolean;
     message: string;
+}
+
+// Add to your existing types
+export interface IGetProjectByIdRequest {
+    projectId: string;
+}
+
+export interface IGetProjectByIdResponse {
+    success: boolean;
+    message?: string;
+    project?: {
+        id: string;
+        name: string;
+        color: string;
+        startDate: string;
+        endDate: string;
+        startHour: number;
+        endHour: number;
+        location: string;
+        description: string;
+        client?: {
+            name?: string;
+            email?: string;
+            mobile?: string;
+            cc?: string;
+        } | null;
+        brief: any[];
+        logistics: any[];
+        company: {
+            id: string;
+            name: string;
+        };
+        assignments: {
+            id: string;
+            member: {
+                id: string;
+                name: string;
+                email: string;
+                profilePhoto:string;
+            };
+            role: {
+                id?: string;
+                name?: string;
+            };
+            googleEventId?: string;
+        }[];
+        createdAt: Date;
+        updatedAt: Date;
+    };
+}
+
+export interface GetProjectChecklistRequest {
+    projectId: string;
+}
+
+export interface GetProjectChecklistResponse {
+    success: boolean;
+    message?: string;
+    checklist?: IChecklistItem[];
+}
+
+export interface UpdateProjectChecklistRequest {
+    projectId: string;
+    checklist: IChecklistItem[];
+}
+
+export interface UpdateProjectChecklistResponse {
+    success: boolean;
+    message: string;
+    checklist?: IChecklistItem[];
+}
+export interface GetProjectEquipmentsResponse {
+    success: boolean;
+    message?: string;
+    equipments?: IProjectSection[];
+}
+
+export interface UpdateProjectEquipmentsRequest {
+    equipments: IProjectSection[];
+}
+
+export interface UpdateProjectEquipmentsResponse {
+    success: boolean;
+    message: string;
+    equipments?: IProjectSection[];
 }
