@@ -57,6 +57,25 @@ export interface IChecklistItem {
   completed: boolean;
   description?: string;
 }
+export interface IReminders {
+  weekBefore: boolean;
+  dayBefore: boolean;
+}
+
+export interface IFolderMetadata {
+  name: string;
+  parentId?: string | null; // for future nested folder support
+  createdAt: string;
+}
+
+export interface IMoodBoard {
+  folders: {
+    [folderId: string]: IFolderMetadata;
+  };
+  uploads: {
+    [folderId: string]: string[]; // array of image URLs
+  };
+}
 
 @Entity()
 export class Project implements IProject {
@@ -104,6 +123,16 @@ export class Project implements IProject {
 
   @Column({ type: "json", nullable: true })
   equipments: IProjectSection[];
+
+  @Column({
+    type: "jsonb",
+    nullable: false,
+    default: () => `'{"weekBefore": true, "dayBefore": true}'::jsonb`,
+  })
+  reminders: IReminders;
+
+  @Column({ type: "json", nullable: true, default: () => `'{"folders": {}, "uploads": {}}'` })
+  moodBoard: IMoodBoard;
 
   @ManyToOne(() => Company, (company) => company.projects, { onDelete: "CASCADE" })
   company: Company;

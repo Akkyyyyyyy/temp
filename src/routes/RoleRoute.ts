@@ -4,13 +4,12 @@ import authMiddleware from "../middleware/jwt";
 
 const roleRouter = express.Router();
 
-roleRouter.use(authMiddleware);
-roleRouter.post("/company", RoleController.getCompanyRoles);
-roleRouter.post("/:id", RoleController.getRoleById);
-roleRouter.post("/:id/usage", RoleController.getRoleUsage);
-roleRouter.post("/", RoleController.createRole);
-roleRouter.put("/:id", RoleController.updateRole);
-roleRouter.delete("/:id", RoleController.deleteRole);
+roleRouter.post("/company",authMiddleware, RoleController.getCompanyRoles);
+roleRouter.post("/:id",authMiddleware, RoleController.getRoleById);
+roleRouter.post("/:id/usage",authMiddleware, RoleController.getRoleUsage);
+roleRouter.post("/",authMiddleware, RoleController.createRole);
+roleRouter.put("/:id",authMiddleware, RoleController.updateRole);
+roleRouter.delete("/:id",authMiddleware, RoleController.deleteRole);
 
 
 export default roleRouter;

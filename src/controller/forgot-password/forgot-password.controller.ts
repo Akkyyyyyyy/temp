@@ -4,13 +4,13 @@ import { Company } from "../../entity/Company";
 import { Member } from "../../entity/Member";
 import bcrypt from "bcryptjs";
 import jwt from "jsonwebtoken";
-import { transporter, sendEmail } from "../../utils/mailer";
-import { 
-    IForgotPasswordRequest, 
-    IVerifyOTPRequest, 
-    IResetPasswordRequest, 
-    IPasswordResetToken, 
-    IVerifiedResetToken 
+import { transporter, sendEmail, sendForgotPasswordEmail } from "../../utils/mailer";
+import {
+    IForgotPasswordRequest,
+    IVerifyOTPRequest,
+    IResetPasswordRequest,
+    IPasswordResetToken,
+    IVerifiedResetToken
 } from "./types";
 
 class ForgotPasswordController {
@@ -38,7 +38,7 @@ class ForgotPasswordController {
                 user = await companyRepo.findOne({ where: { email } });
             } else {
                 const memberRepo = AppDataSource.getRepository(Member);
-                user = await memberRepo.findOne({ where: { email } });
+                user = await memberRepo.findOne({ where: { email },  relations: ["company"], });
             }
 
             if (!user) {
@@ -63,16 +63,16 @@ class ForgotPasswordController {
 
             try {
                 if (process.env.SMTP_EMAIL) {
-                    await sendEmail(
+                    await sendForgotPasswordEmail(
                         email,
-                        'Password Reset OTP',
-                        `
-                            <h2>Password Reset Request</h2>
-                            <p>Your OTP code is: <strong>${otp}</strong></p>
-                            <p>This OTP will expire in 15 minutes.</p>
-                            <p>If you didn't request this, please ignore this email.</p>
-                        `
+                        otp,
+                        user.company.name,
+                        '15 minutes'
                     );
+                } else {
+                    // In development, log the OTP
+                    console.log(`Password Reset OTP for ${email}: ${otp}`);
+                    console.log(`Reset token: ${resetToken}`);
                 }
             } catch (emailError) {
                 console.error('Email sending failed:', emailError);
@@ -80,12 +80,16 @@ class ForgotPasswordController {
                     console.log(`OTP for ${email}: ${otp}`);
                     console.log(`Reset token: ${resetToken}`);
                 }
+                return res.status(400).json({
+                success: false,
+                message: "Error while sending OTP"
+            });
             }
 
             return res.status(200).json({
                 success: true,
                 message: "OTP sent to email",
-                otp,
+                // otp,
                 data: { token: resetToken }
             });
 
@@ -180,27 +184,7 @@ class ForgotPasswordController {
 
                 const { email, userType } = decoded;
 
-                // Update password based on user type
-                if (userType === 'company') {
-                    const companyRepo = AppDataSource.getRepository(Company);
-                    const company = await companyRepo.findOne({ where: { email } });
-
-                    if (!company) {
-                        return res.status(400).json({ message: "Company not found" });
-                    }
-
-                    // Check if new password is different from current password
-                    const isSamePassword = await bcrypt.compare(newPassword, company.passwordHash);
-                    if (isSamePassword) {
-                        return res.status(400).json({ message: "New password must be different from current password" });
-                    }
-
-                    const passwordHash = await bcrypt.hash(newPassword, 10);
-                    company.passwordHash = passwordHash;
-                    company.updatedAt = new Date();
-                    await companyRepo.save(company);
-
-                } else if (userType === 'member') {
+                if (userType === 'member') {
                     const memberRepo = AppDataSource.getRepository(Member);
                     const member = await memberRepo.findOne({ where: { email } });
 

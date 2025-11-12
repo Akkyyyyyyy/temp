@@ -22,7 +22,7 @@ const s3Client = new S3Client({
 export const upload = multer({
   storage: multer.memoryStorage(),
   limits: {
-    fileSize: 2 * 1024 * 1024, // 2MB limit
+    fileSize: 10 * 1024 * 1024, // 10MB limit
   },
   fileFilter: (req, file, cb) => {
     const allowedMimes = [
@@ -36,7 +36,11 @@ export const upload = multer({
       'application/vnd.openxmlformats-officedocument.wordprocessingml.document',
       'video/mp4',
       'video/mpeg',
-      'video/quicktime'
+      'video/quicktime',
+      'application/zip',
+      'application/x-zip-compressed',
+      'application/x-rar-compressed',
+      'application/x-7z-compressed'
     ];
     if (allowedMimes.includes(file.mimetype)) cb(null, true);
     else cb(new Error('Invalid file type. Only images and documents are allowed.'));
@@ -56,6 +60,28 @@ export const formUpload = multer({
 export const textUpload = multer({
   storage: multer.memoryStorage(),
   limits: { fieldSize: 10 * 1024 * 1024 },
+});
+
+// Multer configuration for bulk image uploads (moodBoard)
+export const imageUpload = multer({
+  storage: multer.memoryStorage(),
+  limits: {
+    fileSize: 5 * 1024 * 1024, // 5MB limit per file
+    files: 100, // Maximum 100 files at once
+  },
+  fileFilter: (req, file, cb) => {
+    const allowedImageMimes = [
+      'image/jpeg',
+      'image/png',
+      'image/webp',
+      'image/jpg',
+    ];
+    if (allowedImageMimes.includes(file.mimetype)) {
+      cb(null, true);
+    } else {
+      cb(new Error('Invalid file type. Only images (JPEG, PNG, WEBP) are allowed.'));
+    }
+  },
 });
 
 // Interface for upload parameters
@@ -204,6 +230,7 @@ export const getSignedUrl = async (
 
 export default {
   upload,
+  imageUpload,
   uploadToS3,
   deleteFromS3,
   generateFileKey,

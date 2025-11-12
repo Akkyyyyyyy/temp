@@ -14,8 +14,9 @@ memberRouter.put("/update/:id", authMiddleware, formUpload.single('photo'), Memb
 memberRouter.post("/upload-photo", authMiddleware, upload.single('photo'), createUploadMiddleware('photo', 'images'), MemberController.uploadProfilePhoto);
 memberRouter.delete('/remove-photo/:id',authMiddleware, MemberController.removeProfilePhoto);
 memberRouter.post("/login", MemberController.memberLogin);
-memberRouter.delete("/delete/:id", MemberController.deleteMember);
+memberRouter.delete("/delete/:id",authMiddleware, MemberController.deleteMember);
 memberRouter.patch('/:id/ring-color',authMiddleware,MemberController.updateRingColor);
-memberRouter.patch("/:id/toggle-status", MemberController.toggleMemberStatus);
+memberRouter.patch("/:id/toggle-status",authMiddleware, MemberController.toggleMemberStatus);
+memberRouter.post('/toggle-admin',authMiddleware, MemberController.toggleAdmin);
 
 export default memberRouter;

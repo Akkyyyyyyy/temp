@@ -9,6 +9,7 @@ import {
 import { Member } from "./Member";
 import { Project } from "./Project";
 import { Role } from "./Role";
+import { Package } from "./Package";
 
 export interface ICompany {
   id: string;
@@ -18,7 +19,6 @@ export interface ICompany {
   members?: Member[];
   projects?: Project[];
   roles?: Role[];
-  passwordHash: string;
   createdAt: Date;
   updatedAt: Date;
 }
@@ -37,14 +37,14 @@ export class Company implements ICompany {
   @Column()
   country: string;
 
-  @Column()
-  passwordHash: string;
-
   @OneToMany(() => Member, (member) => member.company)
   members: Member[];
 
   @OneToMany(() => Project, (project) => project.company)
   projects: Project[];
+
+  @OneToMany(() => Package, (pkg) => pkg.company)
+  packages: Package[];
 
   @OneToMany(() => Role, (role) => role.company)
   roles: Role[];

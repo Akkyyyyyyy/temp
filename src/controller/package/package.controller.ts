@@ -8,6 +8,7 @@ import {
 import { AppDataSource } from "../../config/data-source";
 import { Package } from "../../entity/Package";
 import { Member } from "../../entity/Member";
+import { Company } from "../../entity/Company";
 
 class PackageController {
   // Create a new package
@@ -24,21 +25,21 @@ class PackageController {
         features, 
         addons, 
         status, 
-        memberId 
+        companyId 
       } = req.body;
 
       // Validate required fields
-      if (!name || !price || !duration || !status || !memberId) {
+      if (!name || !price || !duration || !status || !companyId) {
         res.status(400).json({ message: "All required fields must be provided" });
         return;
       }
 
       const packageRepo = AppDataSource.getRepository(Package);
-      const memberRepo = AppDataSource.getRepository(Member);
+      const companyRepo = AppDataSource.getRepository(Company);
 
       // Check if member exists
-      const member = await memberRepo.findOne({ where: { id: memberId } });
-      if (!member) {
+      const company = await companyRepo.findOne({ where: { id: companyId } });
+      if (!company) {
         res.status(404).json({ message: "Member not found" });
         return;
       }
@@ -58,7 +59,7 @@ class PackageController {
         features: features || null,
         addons: addons || null,
         status,
-        member
+        company
       });
 
       await packageRepo.save(newPackage);
@@ -66,7 +67,7 @@ class PackageController {
       // Fetch the created package with member relation
       const createdPackage = await packageRepo.findOne({
         where: { id: newPackage.id },
-        relations: ["member"]
+        relations: ["company"]
       });
 
       return res.status(201).json({ 
@@ -88,7 +89,7 @@ class PackageController {
       const packageRepo = AppDataSource.getRepository(Package);
       
       const packages = await packageRepo.find({
-        relations: ["member"],
+        relations: ["company"],
         order: { createdAt: "DESC" }
       });
 
@@ -113,7 +114,7 @@ class PackageController {
       const packageRepo = AppDataSource.getRepository(Package);
       const packageItem = await packageRepo.findOne({
         where: { id },
-        relations: ["member"]
+        relations: ["company"]
       });
 
       if (!packageItem) {
@@ -144,7 +145,7 @@ class PackageController {
       
       const packageItem = await packageRepo.findOne({
         where: { id },
-        relations: ["member"]
+        relations: ["company"]
       });
 
       if (!packageItem) {
@@ -165,7 +166,7 @@ class PackageController {
       // Fetch updated package
       const updatedPackage = await packageRepo.findOne({
         where: { id },
-        relations: ["member"]
+        relations: ["company"]
       });
 
       return res.status(200).json({
@@ -189,7 +190,7 @@ class PackageController {
       const packageRepo = AppDataSource.getRepository(Package);
       const packageItem = await packageRepo.findOne({
         where: { id },
-        relations: ["member"]
+        relations: ["company"]
       });
 
       if (!packageItem) {
@@ -210,17 +211,17 @@ class PackageController {
   };
 
   // Get packages by member ID
-  public getPackagesByMember = async (
-    req: Request<{ memberId: string }>,
+  public getPackagesByCompany = async (
+    req: Request<{ companyId: string }>,
     res: Response<IPackageListResponse>
   ) => {
     try {
-      const { memberId } = req.params;
+      const { companyId } = req.params;
 
       const packageRepo = AppDataSource.getRepository(Package);
       const packages = await packageRepo.find({
-        where: { member: { id: memberId } },
-        relations: ["member"],
+        where: { company: { id: companyId } },
+        relations: ["company"],
         order: { createdAt: "DESC" }
       });
 

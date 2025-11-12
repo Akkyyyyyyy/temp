@@ -1,0 +1,140 @@
+/* Reset and base styles */
+body {
+    margin: 0;
+    padding: 0;
+    font-family: 'Arial', sans-serif;
+    line-height: 1.6;
+    color: #333;
+    background-color: #f4f4f4;
+}
+
+.email-container {
+    max-width: 600px;
+    margin: 0 auto;
+    background: #ffffff;
+    border-radius: 8px;
+    overflow: hidden;
+    box-shadow: 0 2px 10px rgba(0, 0, 0, 0.1);
+}
+
+.header {
+    background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+    color: white;
+    padding: 30px 20px;
+    text-align: center;
+}
+
+.header h1 {
+    margin: 0;
+    font-size: 24px;
+    font-weight: 600;
+}
+
+.content {
+    padding: 30px;
+}
+
+.credentials-card {
+    background: #f8f9fa;
+    border: 1px solid #e9ecef;
+    border-radius: 6px;
+    padding: 20px;
+    margin: 20px 0;
+}
+
+.credential-item {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    padding: 10px 0;
+    border-bottom: 1px solid #dee2e6;
+}
+
+.credential-item:last-child {
+    border-bottom: none;
+}
+
+.label {
+    font-weight: 600;
+    color: #495057;
+}
+
+.value {
+    color: #212529;
+}
+
+.password {
+    font-family: 'Courier New', monospace;
+    background: #fff3cd;
+    padding: 4px 8px;
+    border-radius: 4px;
+    border: 1px solid #ffeaa7;
+}
+
+.warning {
+    background: #fff3cd;
+    border: 1px solid #ffecb5;
+    border-radius: 6px;
+    padding: 15px;
+    margin: 20px 0;
+    color: #856404;
+}
+
+.cta-button {
+    text-align: center;
+    margin: 25px 0;
+}
+
+.button {
+    display: inline-block;
+    background: #28a745;
+    color: white;
+    padding: 12px 30px;
+    text-decoration: none;
+    border-radius: 6px;
+    font-weight: 600;
+    transition: background 0.3s ease;
+}
+
+.button:hover {
+    background: #218838;
+}
+
+.footer {
+    background: #f8f9fa;
+    padding: 20px;
+    text-align: center;
+    border-top: 1px solid #e9ecef;
+}
+
+.signature {
+    margin-top: 15px;
+    color: #6c757d;
+    font-size: 14px;
+}
+
+.signature a {
+    color: #6c757d;
+    text-decoration: none;
+}
+
+/* Responsive design */
+@media (max-width: 600px) {
+    .email-container {
+        margin: 10px;
+        border-radius: 0;
+    }
+    
+    .content {
+        padding: 20px;
+    }
+    
+    .credential-item {
+        flex-direction: column;
+        align-items: flex-start;
+    }
+    
+    .value {
+        margin-top: 5px;
+    }
+}

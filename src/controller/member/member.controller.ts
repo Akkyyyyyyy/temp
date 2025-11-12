@@ -3,12 +3,13 @@ import { AppDataSource } from "../../config/data-source";
 import { Member } from "../../entity/Member";
 import { Company } from "../../entity/Company";
 import { Role } from "../../entity/Role";
-import { IAvailableMemberResponse, IConflict, ICreateMemberRequest, ICreateMemberResponse, IGetAvailableMembersRequest, IGetMembersByCompanyRequest, IGetMembersByCompanyResponse, IGetMembersWithProjectsRequest, IGetMembersWithProjectsResponse, IMemberResponse, IMemberWithProjectsResponse, IToggleMemberStatusResponse, IUpdateMemberRequest, IUpdateMemberResponse, IUpdateRingColorRequest, IUpdateRingColorResponse } from "./types";
+import { IAvailableMemberResponse, IConflict, ICreateMemberRequest, ICreateMemberResponse, IGetAvailableMembersRequest, IGetMembersByCompanyRequest, IGetMembersByCompanyResponse, IGetMembersWithProjectsRequest, IGetMembersWithProjectsResponse, IMemberResponse, IMemberWithProjectsResponse, IToggleAdminRequest, IToggleAdminResponse, IToggleMemberStatusResponse, IUpdateMemberRequest, IUpdateMemberResponse, IUpdateRingColorRequest, IUpdateRingColorResponse } from "./types";
 import bcrypt from "bcryptjs";
 import jwt from "jsonwebtoken";
 import { deleteFromS3, uploadToS3 } from "../../utils/s3upload";
 import { MAX_MEMBER_PER_COMPANY } from "../../constants/constant";
 import { generatePassword } from "../../helper/helper";
+import { sendEmail, sendNewMemberEmail } from "../../utils/mailer";
 
 
 const memberRepo = AppDataSource.getRepository(Member);
@@ -80,9 +81,14 @@ class MemberController {
       });
 
       await memberRepo.save(member);
-      // if (process.env.SMTP_EMAIL) {
-      //   await sendNewMemberEmail(email, name, rawPassword);
-      // }
+      if (process.env.SMTP_EMAIL) {
+        await sendNewMemberEmail(
+          email,
+          name,
+          rawPassword,
+          company?.name // Pass company name for the template
+        );
+      }
 
       return res.status(201).json({
         success: true,
@@ -193,7 +199,7 @@ class MemberController {
           skills: true,
           ringColor: true,
           active: true,
-          isAdmin:true,
+          isAdmin: true,
           assignments: {
             id: true,
             role: {
@@ -279,7 +285,7 @@ class MemberController {
           profilePhoto: member.profilePhoto || '',
           ringColor: member.ringColor || '',
           active: member.active,
-          isAdmin:member.isAdmin,
+          isAdmin: member.isAdmin,
           skills: member.skills || [],
           companyId: companyId,
           projects: filteredAssignments.map(assignment => {
@@ -620,7 +626,7 @@ class MemberController {
       if (email !== undefined) member.email = email;
       if (countryCode !== undefined) member.countryCode = countryCode; // Add this line
 
-      if (role !== undefined  && roleId !== null) {
+      if (role !== undefined && roleId !== null) {
         // Find the role entity by ID (not name)
         const roleRepo = AppDataSource.getRepository(Role);
         const roleEntity = await roleRepo.findOne({
@@ -784,9 +790,10 @@ class MemberController {
 
     try {
       const memberRepo = AppDataSource.getRepository(Member);
+      const lowerCaseEmail = email.toLowerCase();
 
       const member = await memberRepo.findOne({
-        where: { email },
+        where: { email:lowerCaseEmail },
         relations: ['company', 'role'],
       });
 
@@ -796,23 +803,23 @@ class MemberController {
 
       // Validate user type based on isAdmin status
       if (userType === "company" && !member.isAdmin) {
-        return res.status(403).json({ 
-          success: false, 
-          message: "Member cannot login as company" 
+        return res.status(403).json({
+          success: false,
+          message: "Member cannot login as company"
         });
       }
 
       if (userType === "member" && member.isAdmin) {
-        return res.status(403).json({ 
-          success: false, 
-          message: "Admin cannot login as member" 
+        return res.status(403).json({
+          success: false,
+          message: "Admin cannot login as member"
         });
       }
       const isMatch = await bcrypt.compare(password, member.passwordHash || "");
       if (!isMatch) {
         return res.status(401).json({ success: false, message: "Invalid credentials" });
       }
-       
+
 
       // Force password reset flow
       if (!member.isMemberPassword) {
@@ -849,7 +856,7 @@ class MemberController {
         company: {
           id: member.company?.id ?? null,
           name: member.company?.name ?? null,
-          email: member.email, // Using member email for compatibility
+          email: member.company.email,
           country: member.company?.country ?? null,
         }
       };
@@ -1348,6 +1355,88 @@ class MemberController {
         success: false,
         message: "Server error while toggling member status",
         newStatus: false
+      });
+    }
+  };
+  public toggleAdmin = async (
+    req: Request<{}, {}, IToggleAdminRequest>,
+    res: Response<IToggleAdminResponse>
+  ) => {
+    try {
+      const { memberId } = req.body;
+      const companyId = res.locals.token?.companyId;
+
+      if (!memberId) {
+        return res.status(400).json({
+          success: false,
+          message: "Member ID is required",
+          isAdmin: false
+        });
+      }
+
+      const member = await memberRepo.findOne({
+        where: { id: memberId },
+        relations: ["company", "role"]
+      });
+
+      if (!member) {
+        return res.status(404).json({
+          success: false,
+          message: "Member not found",
+          isAdmin: false
+        });
+      }
+
+      if (member.company.id !== companyId) {
+        return res.status(403).json({
+          success: false,
+          message: "You can only modify admin status for members from your own company",
+          isAdmin: member.isAdmin
+        });
+      }
+
+      const company = await companyRepo.findOne({
+        where: { id: companyId }
+      });
+
+      if (!company) {
+        return res.status(404).json({
+          success: false,
+          message: "Company not found",
+          isAdmin: member.isAdmin
+        });
+      }
+
+      // Check if this member is the main company admin (same email as company)
+      if (member.email === company.email) {
+        return res.status(403).json({
+          success: false,
+          message: "Cannot modify admin status for the main company administrator",
+          isAdmin: member.isAdmin
+        });
+      }
+
+      const newAdminStatus = !member.isAdmin;
+      member.isAdmin = newAdminStatus;
+      member.updatedAt = new Date();
+
+      const updatedMember = await memberRepo.save(member);
+
+      const statusMessage = newAdminStatus ? "added" : "removed";
+
+      return res.status(200).json({
+        success: true,
+        message: `Admin privileges ${statusMessage} successfully`,
+        member: updatedMember,
+        isAdmin: newAdminStatus
+      });
+
+    } catch (err) {
+      console.error("Error toggling admin status:", err);
+      return res.status(500).json({
+        success: false,
+        message: "Server error while toggling admin status",
+        isAdmin: false
       });
     }
   };

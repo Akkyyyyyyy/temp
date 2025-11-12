@@ -4,6 +4,7 @@ import bodyParser from "body-parser";
 import cors from "cors";
 import { AppDataSource } from "./config/data-source";
 import mainRouter from "./routes/main";
+import { cronWorker } from "./worker/cron-worker";
 
 AppDataSource.initialize().then(async () => {
   const app = express();
@@ -26,5 +27,6 @@ AppDataSource.initialize().then(async () => {
   app.listen(port, () => {
     console.log(`Server is running on port ${port}`);
   });
+  cronWorker.start();
 
 }).catch(error => console.log(error));

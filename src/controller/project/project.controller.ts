@@ -48,9 +48,10 @@ class ProjectController {
                 description,
                 companyId,
                 client,
+                reminders,
                 assignments = []
             } = req.body;
-
+            
             // Enhanced validation
             if (!name?.trim()) {
                 return res.status(400).json({ success: false, message: "Project name is required" });
@@ -84,6 +85,7 @@ class ProjectController {
                     mobile: client.mobile.trim(),
                     cc: client.cc
                 } : null,
+                reminders: reminders || { weekBefore: true, dayBefore: true },
                 company: companyEnt
             });
 
@@ -96,7 +98,7 @@ class ProjectController {
 
             if (assignments.length > 0) {
                 for (const assignment of assignments) {
-                    const { memberId, roleId } = assignment;
+                    const { memberId, roleId, instructions } = assignment;
 
                     if (!memberId || !roleId) {
                         console.warn(`Skipping assignment with missing memberId or roleId:`, assignment);
@@ -128,7 +130,8 @@ class ProjectController {
                     const projectAssignment = assignmentRepo.create({
                         member,
                         project: newProject,
-                        role: roleEntity
+                        role: roleEntity,
+                        instructions: instructions?.trim() || null
                     });
 
                     let googleEventId;

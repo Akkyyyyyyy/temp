@@ -9,6 +9,6 @@ packageRouter.get("/getAll", packageController.getAllPackages);
 packageRouter.get("/:id", packageController.getPackageById);
 packageRouter.put("/:id", packageController.updatePackage);
 packageRouter.delete("/:id", packageController.deletePackage);
-packageRouter.get("/member/:memberId", packageController.getPackagesByMember);
+packageRouter.get("/company/:companyId", packageController.getPackagesByCompany);
 
 export default packageRouter;

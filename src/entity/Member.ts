@@ -96,9 +96,6 @@ export class Member implements IMember {
   @OneToMany(() => GoogleToken, (googleToken) => googleToken.member)
   googleTokens: GoogleToken[];
 
-  @OneToMany(() => Package, (pkg) => pkg.member)
-  packages: Package[];
-
   @CreateDateColumn()
   createdAt: Date;
 

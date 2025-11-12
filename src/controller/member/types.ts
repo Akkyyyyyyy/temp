@@ -188,3 +188,13 @@ export interface IProjectWithStatusResponse {
   logistics: string | null;
   status: 'current' | 'upcoming';
 }
+export interface IToggleAdminRequest {
+  memberId: string;
+}
+
+export interface IToggleAdminResponse {
+  success: boolean;
+  message: string;
+  member?: Member;
+  isAdmin: boolean;
+}

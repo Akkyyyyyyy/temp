@@ -3,51 +3,54 @@ import { AppDataSource } from "../../config/data-source";
 import { Project } from "../../entity/Project";
 import { ProjectAssignment } from "../../entity/ProjectAssignment";
 import { IChecklistItem, IProjectSection } from "../../entity/Project";
-import { 
-    GetProjectChecklistResponse, 
-    UpdateProjectChecklistRequest, 
+import {
+    GetProjectChecklistResponse,
+    UpdateProjectChecklistRequest,
     UpdateProjectChecklistResponse,
     GetProjectEquipmentsResponse,
     UpdateProjectEquipmentsRequest,
-    UpdateProjectEquipmentsResponse
+    UpdateProjectEquipmentsResponse,
+    GetProjectRemindersResponse,
+    UpdateProjectRemindersRequest,
+    UpdateProjectRemindersResponse
 } from "./types";
 import { generateFileKey, uploadToS3 } from "../../utils/s3upload";
 
 // Types for Project Assignments
 export interface GetProjectAssignmentsResponse {
-  success: boolean;
-  message?: string;
-  assignments?: AssignmentResponse[];
+    success: boolean;
+    message?: string;
+    assignments?: AssignmentResponse[];
 }
 
 export interface UpdateAssignmentInstructionsRequest {
-  instructions: string;
+    instructions: string;
 }
 
 export interface UpdateAssignmentInstructionsResponse {
-  success: boolean;
-  message: string;
-  assignment?: AssignmentResponse;
+    success: boolean;
+    message: string;
+    assignment?: AssignmentResponse;
 }
 
 interface AssignmentResponse {
-  id: string;
-  instructions?: string;
-  member: {
     id: string;
-    name: string;
-    email: string;
-    profilePhoto?: string;
-    ringColor?: string;
-  };
-  role: {
-    id: string;
-    name: string;
-  };
+    instructions?: string;
+    member: {
+        id: string;
+        name: string;
+        email: string;
+        profilePhoto?: string;
+        ringColor?: string;
+    };
+    role: {
+        id: string;
+        name: string;
+    };
 }
 
 class AdditionalTabsController {
-    
+
     // GET /project/:projectId/checklist
     public getProjectChecklist = async (
         req: Request<{ projectId: string }, {}, {}>,
@@ -516,182 +519,182 @@ class AdditionalTabsController {
         }
     };
     public getProjectDocuments = async (
-  req: Request<{ projectId: string }, {}, {}>,
-  res: Response<{ success: boolean; message?: string; documents?: { title: string; filename: string }[] }>
-) => {
-  try {
-    const { projectId } = req.params;
+        req: Request<{ projectId: string }, {}, {}>,
+        res: Response<{ success: boolean; message?: string; documents?: { title: string; filename: string }[] }>
+    ) => {
+        try {
+            const { projectId } = req.params;
 
-    if (!projectId?.trim()) {
-      return res.status(400).json({ success: false, message: "Project ID is required" });
-    }
+            if (!projectId?.trim()) {
+                return res.status(400).json({ success: false, message: "Project ID is required" });
+            }
 
-    const projectRepo = AppDataSource.getRepository(Project);
-    const project = await projectRepo.findOne({
-      where: { id: projectId },
-      select: ["id", "documents"]
-    });
+            const projectRepo = AppDataSource.getRepository(Project);
+            const project = await projectRepo.findOne({
+                where: { id: projectId },
+                select: ["id", "documents"]
+            });
 
-    if (!project) {
-      return res.status(404).json({ success: false, message: "Project not found" });
-    }
+            if (!project) {
+                return res.status(404).json({ success: false, message: "Project not found" });
+            }
 
-    return res.status(200).json({
-      success: true,
-      documents: project.documents || []
-    });
-  } catch (error) {
-    console.error("Error fetching project documents:", error);
-    return res.status(500).json({
-      success: false,
-      message: "An internal server error occurred while fetching project documents"
-    });
-  }
-};
-public updateProjectDocuments = async (
-  req: Request<{ projectId: string }, {}, { documents: { title: string; filename: string }[] }>,
-  res: Response<{ success: boolean; message?: string; documents?: { title: string; filename: string }[] }>
-) => {
-  const queryRunner = AppDataSource.createQueryRunner();
-  await queryRunner.connect();
-  await queryRunner.startTransaction();
-
-  try {
-    const { projectId } = req.params;
-    const { documents } = req.body;
-
-    // Validation
-    if (!projectId?.trim()) {
-      return res.status(400).json({ success: false, message: "Project ID is required" });
-    }
-
-    if (!Array.isArray(documents)) {
-      return res.status(400).json({ success: false, message: "Documents must be an array" });
-    }
-
-    // Validate each document
-    for (const doc of documents) {
-      if (!doc.title || typeof doc.title !== "string" || !doc.title.trim()) {
-        return res.status(400).json({ success: false, message: "Each document must have a title" });
-      }
-      if (!doc.filename || typeof doc.filename !== "string" || !doc.filename.trim()) {
-        return res.status(400).json({ success: false, message: "Each document must have a filename (S3 key or URL)" });
-      }
-    }
-
-    const projectRepo = queryRunner.manager.getRepository(Project);
-
-    const project = await projectRepo.findOne({ where: { id: projectId } });
-
-    if (!project) {
-      return res.status(404).json({ success: false, message: "Project not found" });
-    }
-
-    // replace documents array
-    project.documents = documents;
-    project.updatedAt = new Date();
-
-    await projectRepo.save(project);
-    await queryRunner.commitTransaction();
-
-    return res.status(200).json({
-      success: true,
-      message: "Documents updated successfully",
-      documents: project.documents
-    });
-  } catch (error) {
-    await queryRunner.rollbackTransaction();
-    console.error("Error updating project documents:", error);
-    return res.status(500).json({
-      success: false,
-      message: "An internal server error occurred while updating project documents"
-    });
-  } finally {
-    await queryRunner.release();
-  }
-};
-public uploadProjectDocument = async (
-  req: Request<{ projectId: string }, {}, {}>,
-  res: Response<{ success: boolean; message?: string; document?: { title: string; filename: string } }>
-) => {
-  const queryRunner = AppDataSource.createQueryRunner();
-  await queryRunner.connect();
-  await queryRunner.startTransaction();
-
-  try {
-    const { projectId } = req.params;
-
-    if (!projectId?.trim()) {
-      return res.status(400).json({ success: false, message: "Project ID is required" });
-    }
-
-    // multer should have put file in req.file
-    const file = (req as any).file as Express.Multer.File & { s3Key?: string; s3Url?: string };
-    const titleFromBody = (req as any).body?.title;
-
-    if (!file) {
-      return res.status(400).json({ success: false, message: "File is required" });
-    }
-
-    const bucketName = process.env.AWS_S3_BUCKET_NAME;
-    if (!bucketName) {
-      return res.status(500).json({ success: false, message: "S3 bucket not configured" });
-    }
-
-    // Generate key and upload (using your uploadToS3 helper)
-    const key = generateFileKey(file.originalname, "documents");
-    const uploadResult = await uploadToS3({
-      bucketName,
-      key,
-      body: file.buffer,
-      contentType: file.mimetype,
-      metadata: {
-        originalName: file.originalname,
-        uploadedAt: new Date().toISOString(),
-      },
-    });
-
-    if (!uploadResult.success) {
-      await queryRunner.rollbackTransaction();
-      return res.status(500).json({ success: false, message: "Failed to upload file to S3", });
-    }
-
-    const projectRepo = queryRunner.manager.getRepository(Project);
-    const project = await projectRepo.findOne({ where: { id: projectId } });
-
-    if (!project) {
-      return res.status(404).json({ success: false, message: "Project not found" });
-    }
-
-    const newDoc = {
-      title: titleFromBody && typeof titleFromBody === "string" && titleFromBody.trim() ? titleFromBody.trim() : file.originalname,
-      filename: uploadResult.key!, // store S3 key (or save URL if you prefer)
+            return res.status(200).json({
+                success: true,
+                documents: project.documents || []
+            });
+        } catch (error) {
+            console.error("Error fetching project documents:", error);
+            return res.status(500).json({
+                success: false,
+                message: "An internal server error occurred while fetching project documents"
+            });
+        }
     };
+    public updateProjectDocuments = async (
+        req: Request<{ projectId: string }, {}, { documents: { title: string; filename: string }[] }>,
+        res: Response<{ success: boolean; message?: string; documents?: { title: string; filename: string }[] }>
+    ) => {
+        const queryRunner = AppDataSource.createQueryRunner();
+        await queryRunner.connect();
+        await queryRunner.startTransaction();
 
-    const currentDocs = Array.isArray(project.documents) ? project.documents : [];
-    project.documents = [...currentDocs, newDoc];
-    project.updatedAt = new Date();
+        try {
+            const { projectId } = req.params;
+            const { documents } = req.body;
 
-    await projectRepo.save(project);
-    await queryRunner.commitTransaction();
+            // Validation
+            if (!projectId?.trim()) {
+                return res.status(400).json({ success: false, message: "Project ID is required" });
+            }
 
-    return res.status(201).json({
-      success: true,
-      message: "Document uploaded and added to project",
-      document: newDoc
-    });
-  } catch (error) {
-    await queryRunner.rollbackTransaction();
-    console.error("Error uploading project document:", error);
-    return res.status(500).json({
-      success: false,
-      message: "An internal server error occurred while uploading project document"
-    });
-  } finally {
-    await queryRunner.release();
-  }
-};
- public deleteProjectDocument = async (
+            if (!Array.isArray(documents)) {
+                return res.status(400).json({ success: false, message: "Documents must be an array" });
+            }
+
+            // Validate each document
+            for (const doc of documents) {
+                if (!doc.title || typeof doc.title !== "string" || !doc.title.trim()) {
+                    return res.status(400).json({ success: false, message: "Each document must have a title" });
+                }
+                if (!doc.filename || typeof doc.filename !== "string" || !doc.filename.trim()) {
+                    return res.status(400).json({ success: false, message: "Each document must have a filename (S3 key or URL)" });
+                }
+            }
+
+            const projectRepo = queryRunner.manager.getRepository(Project);
+
+            const project = await projectRepo.findOne({ where: { id: projectId } });
+
+            if (!project) {
+                return res.status(404).json({ success: false, message: "Project not found" });
+            }
+
+            // replace documents array
+            project.documents = documents;
+            project.updatedAt = new Date();
+
+            await projectRepo.save(project);
+            await queryRunner.commitTransaction();
+
+            return res.status(200).json({
+                success: true,
+                message: "Documents updated successfully",
+                documents: project.documents
+            });
+        } catch (error) {
+            await queryRunner.rollbackTransaction();
+            console.error("Error updating project documents:", error);
+            return res.status(500).json({
+                success: false,
+                message: "An internal server error occurred while updating project documents"
+            });
+        } finally {
+            await queryRunner.release();
+        }
+    };
+    public uploadProjectDocument = async (
+        req: Request<{ projectId: string }, {}, {}>,
+        res: Response<{ success: boolean; message?: string; document?: { title: string; filename: string } }>
+    ) => {
+        const queryRunner = AppDataSource.createQueryRunner();
+        await queryRunner.connect();
+        await queryRunner.startTransaction();
+
+        try {
+            const { projectId } = req.params;
+
+            if (!projectId?.trim()) {
+                return res.status(400).json({ success: false, message: "Project ID is required" });
+            }
+
+            // multer should have put file in req.file
+            const file = (req as any).file as Express.Multer.File & { s3Key?: string; s3Url?: string };
+            const titleFromBody = (req as any).body?.title;
+
+            if (!file) {
+                return res.status(400).json({ success: false, message: "File is required" });
+            }
+
+            const bucketName = process.env.AWS_S3_BUCKET_NAME;
+            if (!bucketName) {
+                return res.status(500).json({ success: false, message: "S3 bucket not configured" });
+            }
+
+            // Generate key and upload (using your uploadToS3 helper)
+            const key = generateFileKey(file.originalname, "documents");
+            const uploadResult = await uploadToS3({
+                bucketName,
+                key,
+                body: file.buffer,
+                contentType: file.mimetype,
+                metadata: {
+                    originalName: file.originalname,
+                    uploadedAt: new Date().toISOString(),
+                },
+            });
+
+            if (!uploadResult.success) {
+                await queryRunner.rollbackTransaction();
+                return res.status(500).json({ success: false, message: "Failed to upload file to S3", });
+            }
+
+            const projectRepo = queryRunner.manager.getRepository(Project);
+            const project = await projectRepo.findOne({ where: { id: projectId } });
+
+            if (!project) {
+                return res.status(404).json({ success: false, message: "Project not found" });
+            }
+
+            const newDoc = {
+                title: titleFromBody && typeof titleFromBody === "string" && titleFromBody.trim() ? titleFromBody.trim() : file.originalname,
+                filename: uploadResult.key!, // store S3 key (or save URL if you prefer)
+            };
+
+            const currentDocs = Array.isArray(project.documents) ? project.documents : [];
+            project.documents = [...currentDocs, newDoc];
+            project.updatedAt = new Date();
+
+            await projectRepo.save(project);
+            await queryRunner.commitTransaction();
+
+            return res.status(201).json({
+                success: true,
+                message: "Document uploaded and added to project",
+                document: newDoc
+            });
+        } catch (error) {
+            await queryRunner.rollbackTransaction();
+            console.error("Error uploading project document:", error);
+            return res.status(500).json({
+                success: false,
+                message: "An internal server error occurred while uploading project document"
+            });
+        } finally {
+            await queryRunner.release();
+        }
+    };
+    public deleteProjectDocument = async (
         req: Request<{ projectId: string; filename: string }, {}, {}>,
         res: Response<{ success: boolean; message?: string }>
     ) => {
@@ -719,10 +722,10 @@ public uploadProjectDocument = async (
             }
 
             const currentDocs = Array.isArray(project.documents) ? project.documents : [];
-            
+
             // Find the document to delete
             const documentIndex = currentDocs.findIndex(doc => doc.filename === filename);
-            
+
             if (documentIndex === -1) {
                 return res.status(404).json({ success: false, message: "Document not found" });
             }
@@ -782,10 +785,10 @@ public uploadProjectDocument = async (
             }
 
             const currentDocs = Array.isArray(project.documents) ? project.documents : [];
-            
+
             // Remove the specified documents from the array
             const updatedDocuments = currentDocs.filter(doc => !filenames.includes(doc.filename));
-            
+
             // Check if any documents were actually removed
             if (updatedDocuments.length === currentDocs.length) {
                 return res.status(404).json({ success: false, message: "No matching documents found to delete" });
@@ -808,6 +811,127 @@ public uploadProjectDocument = async (
             return res.status(500).json({
                 success: false,
                 message: "An internal server error occurred while deleting project documents"
+            });
+        } finally {
+            await queryRunner.release();
+        }
+    };
+    public getProjectReminders = async (
+        req: Request<{ projectId: string }, {}, {}>,
+        res: Response<GetProjectRemindersResponse>
+    ) => {
+        try {
+            const { projectId } = req.params;
+
+            if (!projectId?.trim()) {
+                return res.status(400).json({
+                    success: false,
+                    message: "Project ID is required"
+                });
+            }
+
+            const projectRepo = AppDataSource.getRepository(Project);
+
+            const project = await projectRepo.findOne({
+                where: { id: projectId },
+                select: ["id", "reminders"]
+            });
+
+            if (!project) {
+                return res.status(404).json({
+                    success: false,
+                    message: "Project not found"
+                });
+            }
+
+            return res.status(200).json({
+                success: true,
+                reminders: project.reminders || { weekBefore: true, dayBefore: true }
+            });
+
+        } catch (error) {
+            console.error("Error fetching project reminders:", error);
+            return res.status(500).json({
+                success: false,
+                message: "An internal server error occurred while fetching project reminders"
+            });
+        }
+    };
+
+    public updateProjectReminders = async (
+        req: Request<{ projectId: string }, {}, UpdateProjectRemindersRequest>,
+        res: Response<UpdateProjectRemindersResponse>
+    ) => {
+        const queryRunner = AppDataSource.createQueryRunner();
+        await queryRunner.connect();
+        await queryRunner.startTransaction();
+
+        try {
+            const { projectId } = req.params;
+            const { reminders } = req.body;
+
+            // Validation
+            if (!projectId?.trim()) {
+                return res.status(400).json({
+                    success: false,
+                    message: "Project ID is required"
+                });
+            }
+
+            if (!reminders || typeof reminders !== 'object') {
+                return res.status(400).json({
+                    success: false,
+                    message: "Reminders object is required"
+                });
+            }
+
+            // Validate reminders structure
+            if (typeof reminders.weekBefore !== 'boolean') {
+                return res.status(400).json({
+                    success: false,
+                    message: "weekBefore must be a boolean"
+                });
+            }
+
+            if (typeof reminders.dayBefore !== 'boolean') {
+                return res.status(400).json({
+                    success: false,
+                    message: "dayBefore must be a boolean"
+                });
+            }
+
+            const projectRepo = queryRunner.manager.getRepository(Project);
+
+            const project = await projectRepo.findOne({
+                where: { id: projectId }
+            });
+
+            if (!project) {
+                return res.status(404).json({
+                    success: false,
+                    message: "Project not found"
+                });
+            }
+
+            project.reminders = reminders;
+            project.updatedAt = new Date();
+
+            await projectRepo.save(project);
+            await queryRunner.commitTransaction();
+
+            return res.status(200).json({
+                success: true,
+                message: "Reminders updated successfully",
+                reminders: project.reminders
+            });
+
+        } catch (error) {
+            await queryRunner.rollbackTransaction();
+            console.error("Error updating project reminders:", error);
+
+            return res.status(500).json({
+                success: false,
+                message: "An internal server error occurred while updating project reminders"
             });
         } finally {
             await queryRunner.release();

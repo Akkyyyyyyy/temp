@@ -1,10 +1,11 @@
 // src/modules/project/types.ts
 
-import { IChecklistItem, IClient, IProjectSection, Project } from "../../entity/Project";
+import { IChecklistItem, IClient, IProjectSection, IReminders, Project } from "../../entity/Project";
 
 export interface IProjectAssignmentInput {
     memberId: string;
     roleId : string;
+    instructions: string;
 }
 
 export interface ICreateProjectRequest {
@@ -18,6 +19,7 @@ export interface ICreateProjectRequest {
     location: string;
     description?: string;
     companyId: string;
+    reminders:IReminders;
     assignments?: IProjectAssignmentInput[];
 }
 
@@ -190,4 +192,21 @@ export interface UpdateProjectEquipmentsResponse {
     success: boolean;
     message: string;
     equipments?: IProjectSection[];
+}
+
+// Add to your types file
+export interface GetProjectRemindersResponse {
+  success: boolean;
+  message?: string;
+  reminders?: IReminders;
+}
+
+export interface UpdateProjectRemindersRequest {
+  reminders: IReminders;
+}
+
+export interface UpdateProjectRemindersResponse {
+  success: boolean;
+  message: string;
+  reminders?: IReminders;
 }

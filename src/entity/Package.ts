@@ -7,6 +7,7 @@ import {
   UpdateDateColumn,
 } from "typeorm";
 import { Member } from "./Member";
+import { Company } from "./Company";
 
 export type PackageStatus = "active" | "inactive";
 
@@ -19,7 +20,7 @@ export interface IPackage {
   features?: string[] | null;
   addons?: Record<string, any> | null;
   status: PackageStatus;
-  member: Member;
+  company: Company;
   createdAt: Date;
   updatedAt: Date;
 }
@@ -54,8 +55,11 @@ export class Package implements IPackage {
   })
   status: PackageStatus;
 
-  @ManyToOne(() => Member, (member) => member.packages, { onDelete: "CASCADE" })
-  member: Member;
+  // @ManyToOne(() => Member, (member) => member.packages, { onDelete: "CASCADE" })
+  // member: Member;
+
+  @ManyToOne(() => Company, (company) => company.packages, { onDelete: "CASCADE" })
+  company: Company;
 
   @CreateDateColumn()
   createdAt: Date;

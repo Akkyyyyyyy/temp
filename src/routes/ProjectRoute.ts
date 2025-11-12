@@ -2,7 +2,8 @@ import express from "express";
 import ProjectController from "../controller/project/project.controller";
 import authMiddleware from "../middleware/jwt";
 import additionalTabsController from "../controller/project/additionalTabs.Controller";
-import { upload } from "../utils/s3upload";
+import moodBoardController from "../controller/project/moodBoard.controller";
+import { upload, imageUpload } from "../utils/s3upload";
 
 const projectRouter = express.Router();
 
@@ -26,6 +27,14 @@ projectRouter.put("/:projectId/documents", additionalTabsController.updateProjec
 projectRouter.post("/:projectId/documents/upload", upload.single("file"), additionalTabsController.uploadProjectDocument);
 projectRouter.delete("/:projectId/documents/:filename", additionalTabsController.deleteProjectDocument);
 projectRouter.delete("/:projectId/documents", additionalTabsController.deleteProjectDocuments);
+projectRouter.get('/:projectId/reminders', additionalTabsController.getProjectReminders);
+projectRouter.put('/:projectId/reminders', additionalTabsController.updateProjectReminders);
 
+// MoodBoard routes
+projectRouter.get('/:projectId/moodboard',  moodBoardController.getMoodBoard);
+projectRouter.post('/:projectId/moodboard/folder', moodBoardController.createFolder);
+projectRouter.post('/:projectId/moodboard/upload', imageUpload.array('images', 100), moodBoardController.uploadImages);
+projectRouter.delete('/:projectId/moodboard/image', moodBoardController.deleteImage);
+projectRouter.delete('/:projectId/moodboard/folder', moodBoardController.deleteFolder);
 
 export default projectRouter;

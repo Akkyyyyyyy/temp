@@ -10,7 +10,7 @@ export interface ICreatePackageRequest {
   features?: string[] | null;
   addons?: Record<string, any> | null;
   status: "active" | "inactive";
-  memberId: string;
+  companyId: string;
 }
 
 export interface IUpdatePackageRequest {
