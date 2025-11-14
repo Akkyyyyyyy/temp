@@ -72,7 +72,7 @@ class MemberController {
         email,
         role: roleEntity, // Store the role entity
         passwordHash,
-        company: { id: companyId },
+        company: [company],
         countryCode: countryCode || null,
         phone: phone || null,
         location: location || null,
@@ -793,7 +793,7 @@ class MemberController {
       const lowerCaseEmail = email.toLowerCase();
 
       const member = await memberRepo.findOne({
-        where: { email:lowerCaseEmail },
+        where: { email: lowerCaseEmail },
         relations: ['company', 'role'],
       });
 
@@ -830,13 +830,22 @@ class MemberController {
         });
       }
 
+      const primaryCompany = Array.isArray(member.company) ? member.company[0] : member.company;
+      const companyId = primaryCompany?.id ?? null;
+
+      const associatedCompanies =
+      member.company?.map((c) => ({
+        id: c.id,
+        name: c.name,
+        email: c.email, 
+      })) ?? [];
       // Create JWT with user type based on isAdmin
       const type = member.isAdmin ? "admin" : "member";
 
       const token = jwt.sign(
         {
           memberId: member.id,
-          companyId: member.company?.id,
+          companyId: companyId,
           userType: type,
           isAdmin: member.isAdmin ?? false
         },
@@ -854,11 +863,12 @@ class MemberController {
         userType: type,
         location: member.location ?? null,
         company: {
-          id: member.company?.id ?? null,
-          name: member.company?.name ?? null,
-          email: member.company.email,
-          country: member.company?.country ?? null,
-        }
+          id: companyId,
+          name: primaryCompany?.name ?? null,
+          email: primaryCompany?.email ?? null,
+          country: primaryCompany?.country ?? null,
+        },
+        associatedCompanies,
       };
 
       return res.status(200).json({
@@ -1387,13 +1397,16 @@ class MemberController {
         });
       }
 
-      if (member.company.id !== companyId) {
-        return res.status(403).json({
-          success: false,
-          message: "You can only modify admin status for members from your own company",
-          isAdmin: member.isAdmin
-        });
-      }
+      const belongsToCompany = member.company?.some((c) => c.id === companyId);
+
+    if (!belongsToCompany) {
+      return res.status(403).json({
+        success: false,
+        message:
+          "You can only modify admin status for members from your own company",
+        isAdmin: member.isAdmin,
+      });
+    }
 
       const company = await companyRepo.findOne({
         where: { id: companyId }

@@ -7,6 +7,8 @@ import {
   CreateDateColumn,
   UpdateDateColumn,
   JoinColumn,
+  ManyToMany,
+  JoinTable,
 } from "typeorm";
 import { Company } from "./Company";
 import { ProjectAssignment } from "./ProjectAssignment";
@@ -28,7 +30,7 @@ export interface IMember {
   isMemberPassword?: boolean;
   role?: Role | null;
   isAdmin: boolean;
-  company: Company;
+  company: Company[];
   assignments?: ProjectAssignment[];
   countryCode: string;
   createdAt: Date;
@@ -87,8 +89,9 @@ export class Member implements IMember {
   @Column({ default: false })
   isAdmin: boolean;
 
-  @ManyToOne(() => Company, (company) => company.members, { onDelete: "CASCADE" })
-  company: Company;
+  @ManyToMany(() => Company, (company) => company.members, { cascade: true })
+  @JoinTable()
+  company: Company[];
 
   @OneToMany(() => ProjectAssignment, (assignment) => assignment.member)
   assignments: ProjectAssignment[];

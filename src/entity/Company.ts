@@ -5,6 +5,7 @@ import {
   CreateDateColumn,
   UpdateDateColumn,
   OneToMany,
+  ManyToMany,
 } from "typeorm";
 import { Member } from "./Member";
 import { Project } from "./Project";
@@ -37,9 +38,9 @@ export class Company implements ICompany {
   @Column()
   country: string;
 
-  @OneToMany(() => Member, (member) => member.company)
+  @ManyToMany(() => Member, (member) => member.company)
   members: Member[];
-
+  
   @OneToMany(() => Project, (project) => project.company)
   projects: Project[];
 
