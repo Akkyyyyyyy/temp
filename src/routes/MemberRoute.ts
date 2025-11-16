@@ -6,6 +6,9 @@ import { createUploadMiddleware, formUpload, upload } from "../utils/s3upload";
 const memberRouter = express.Router();
 
 memberRouter.post("/add", authMiddleware, MemberController.createMember);
+memberRouter.post("/send-invite", authMiddleware, MemberController.sendMemberInvite);
+memberRouter.post("/check-invite", MemberController.checkMemberInvite);
+memberRouter.post("/set-password", MemberController.setMemberPassword);
 memberRouter.post("/by-company", authMiddleware, MemberController.getMembersByCompany);
 memberRouter.post("/getAllFutureProjects", authMiddleware, MemberController.getMembersWithCurrentFutureProjects);
 memberRouter.post('/available', authMiddleware, MemberController.getAvailableMembers);
@@ -15,6 +18,7 @@ memberRouter.post("/upload-photo", authMiddleware, upload.single('photo'), creat
 memberRouter.delete('/remove-photo/:id',authMiddleware, MemberController.removeProfilePhoto);
 memberRouter.post("/login", MemberController.memberLogin);
 memberRouter.delete("/delete/:id",authMiddleware, MemberController.deleteMember);
+memberRouter.delete("/company/:companyId/remove/:memberId", authMiddleware, MemberController.removeMemberFromCompany);
 memberRouter.patch('/:id/ring-color',authMiddleware,MemberController.updateRingColor);
 memberRouter.patch("/:id/toggle-status",authMiddleware, MemberController.toggleMemberStatus);
 memberRouter.post('/toggle-admin',authMiddleware, MemberController.toggleAdmin);

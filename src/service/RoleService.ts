@@ -14,9 +14,14 @@ export interface UpdateRoleRequest {
   description?: string;
 }
 
-export interface RoleWithCounts extends Role {
-  memberCount: number;
-  assignmentCount: number;
+interface RoleWithCounts {
+  id: string;
+  name: string;
+  description?: string;
+  createdAt: Date;
+  updatedAt: Date;
+  memberCount: number; // Number of active members with this role in the company
+  assignmentCount: number; // Number of assignments with this role in the company
 }
 
 export class RoleService {
@@ -32,44 +37,46 @@ export class RoleService {
 
   // Find all roles for a specific company
   async findByCompanyId(companyId: string): Promise<RoleWithCounts[]> {
-    const roles = await this.roleRepository.find({
-      where: { companyId },
-      order: { name: "ASC" }
-    });
+    const roleRepo = this.roleRepository;
 
-    // Get counts for each role within the company
-    const rolesWithCounts = await Promise.all(
-      roles.map(async (role) => {
-        const [memberCount, assignmentCount] = await Promise.all([
-          this.memberRepository.count({ 
-            where: { 
-              role: { id: role.id },
-              company: { id: companyId }
-            } 
-          }),
-          this.assignmentRepository.count({ 
-            where: { 
-              role: { id: role.id },
-              project: { company: { id: companyId } }
-            } 
-          })
-        ]);
+    const rolesWithCounts = await roleRepo
+      .createQueryBuilder('role')
+      .leftJoin('role.companyMembers', 'companyMembers',
+        'companyMembers.companyId = :companyId AND companyMembers.active = :active',
+        { companyId, active: true }
+      )
+      .leftJoin('role.assignments', 'assignments')
+      .leftJoin('assignments.project', 'project', 'project.companyId = :companyId', { companyId })
+      .where('role.companyId = :companyId', { companyId })
+      .select([
+        'role.id',
+        'role.name',
+        'role.description',
+        'role.createdAt',
+        'role.updatedAt',
+        'COUNT(DISTINCT companyMembers.id) as memberCount',
+        'COUNT(DISTINCT assignments.id) as assignmentCount'
+      ])
+      .groupBy('role.id')
+      .orderBy('role.name', 'ASC')
+      .getRawMany();
 
-        return {
-          ...role,
-          memberCount,
-          assignmentCount
-        };
-      })
-    );
-
-    return rolesWithCounts;
+    // Transform raw results to RoleWithCounts format
+    return rolesWithCounts.map(role => ({
+      id: role.role_id,
+      name: role.role_name,
+      description: role.role_description,
+      createdAt: role.role_createdAt,
+      updatedAt: role.role_updatedAt,
+      memberCount: parseInt(role.memberCount) || 0,
+      assignmentCount: parseInt(role.assignmentCount) || 0
+    }));
   }
 
   // Find role by ID within a specific company
   async findByIdAndCompany(id: string, companyId: string): Promise<Role | null> {
-    return await this.roleRepository.findOne({ 
-      where: { id, companyId } 
+    return await this.roleRepository.findOne({
+      where: { id, companyId }
     });
   }
 
@@ -82,7 +89,7 @@ export class RoleService {
   async createForCompany(roleData: CreateRoleRequest): Promise<Role> {
     // Check if role name already exists in the same company
     const existingRole = await this.roleRepository.findOne({
-      where: { 
+      where: {
         name: roleData.name,
         companyId: roleData.companyId
       }
@@ -103,10 +110,10 @@ export class RoleService {
 
   // Update role within a specific company
   async updateForCompany(id: string, companyId: string, roleData: UpdateRoleRequest): Promise<Role> {
-    const role = await this.roleRepository.findOne({ 
-      where: { id, companyId } 
+    const role = await this.roleRepository.findOne({
+      where: { id, companyId }
     });
-    
+
     if (!role) {
       throw new Error("Role not found");
     }
@@ -114,7 +121,7 @@ export class RoleService {
     // Check if new name conflicts with existing role in the same company
     if (roleData.name && roleData.name !== role.name) {
       const existingRole = await this.roleRepository.findOne({
-        where: { 
+        where: {
           name: roleData.name,
           companyId: companyId
         }
@@ -136,39 +143,64 @@ export class RoleService {
   }
 
   // Delete role within a specific company
-  async deleteForCompany(id: string, companyId: string): Promise<void> {
-    const role = await this.roleRepository.findOne({ 
-      where: { id, companyId } 
-    });
-    
-    if (!role) {
-      throw new Error("Role not found");
-    }
+  // async deleteForCompany(id: string, companyId: string): Promise<void> {
+  //   const role = await this.roleRepository.findOne({
+  //     where: { id, company: { id: companyId } }
+  //   });
 
-    // Check if role is assigned to any members or assignments within the company
-    const [memberCount, assignmentCount] = await Promise.all([
-      this.memberRepository.count({ 
-        where: { 
-          role: { id },
-          company: { id: companyId }
-        } 
-      }),
-      this.assignmentRepository.count({ 
-        where: { 
-          role: { id },
-          project: { company: { id: companyId } }
-        } 
-      })
-    ]);
+  //   if (!role) {
+  //     throw new Error("Role not found in this company");
+  //   }
 
-    const totalAssignments = memberCount + assignmentCount;
-    
-    if (totalAssignments > 0) {
-      throw new Error(`Role is assigned to ${totalAssignments} users and cannot be deleted`);
-    }
+  //   // Get detailed assignment information for better error messages
+  //   const [companyMembers, assignments] = await Promise.all([
+  //     // Get members with this role
+  //     this.companyMemberRepository.find({
+  //       where: {
+  //         role: { id },
+  //         company: { id: companyId }
+  //       },
+  //       relations: ['member'],
+  //       take: 5 // Limit to first 5 for error message
+  //     }),
+  //     // Get assignments with this role
+  //     this.assignmentRepository.find({
+  //       where: {
+  //         role: { id },
+  //         project: { company: { id: companyId } }
+  //       },
+  //       relations: ['member', 'project'],
+  //       take: 5 // Limit to first 5 for error message
+  //     })
+  //   ]);
 
-    await this.roleRepository.remove(role);
-  }
+  //   if (companyMembers.length > 0 || assignments.length > 0) {
+  //     const memberNames = companyMembers.map(cm => cm.member.name).join(', ');
+  //     const projectNames = assignments.map(a => a.project.name).join(', ');
+
+  //     let errorMessage = `Cannot delete role "${role.name}" because it is currently assigned to:`;
+
+  //     if (companyMembers.length > 0) {
+  //       errorMessage += `\n- ${companyMembers.length} member(s): ${memberNames}`;
+  //       if (companyMembers.length === 5) {
+  //         errorMessage += '...';
+  //       }
+  //     }
+
+  //     if (assignments.length > 0) {
+  //       errorMessage += `\n- ${assignments.length} project assignment(s): ${projectNames}`;
+  //       if (assignments.length === 5) {
+  //         errorMessage += '...';
+  //       }
+  //     }
+
+  //     errorMessage += '\n\nPlease reassign or remove these assignments before deleting the role.';
+
+  //     throw new Error(errorMessage);
+  //   }
+
+  //   await this.roleRepository.remove(role);
+  // }
 
   // Delete role (for backward compatibility - deprecated)
   async delete(id: string): Promise<void> {
@@ -177,24 +209,24 @@ export class RoleService {
   }
 
   // Get role usage count within a specific company
-  async getRoleUsageCountForCompany(id: string, companyId: string): Promise<{ memberCount: number; assignmentCount: number }> {
-    const [memberCount, assignmentCount] = await Promise.all([
-      this.memberRepository.count({ 
-        where: { 
-          role: { id },
-          company: { id: companyId }
-        } 
-      }),
-      this.assignmentRepository.count({ 
-        where: { 
-          role: { id },
-          project: { company: { id: companyId } }
-        } 
-      })
-    ]);
+  // async getRoleUsageCountForCompany(id: string, companyId: string): Promise<{ memberCount: number; assignmentCount: number }> {
+  //   const [memberCount, assignmentCount] = await Promise.all([
+  //     this.memberRepository.count({
+  //       where: {
+  //         role: { id },
+  //         company: { id: companyId }
+  //       }
+  //     }),
+  //     this.assignmentRepository.count({
+  //       where: {
+  //         role: { id },
+  //         project: { company: { id: companyId } }
+  //       }
+  //     })
+  //   ]);
 
-    return { memberCount, assignmentCount };
-  }
+  //   return { memberCount, assignmentCount };
+  // }
 
   // Get role usage count (for backward compatibility - deprecated)
   async getRoleUsageCount(id: string): Promise<{ memberCount: number; assignmentCount: number }> {

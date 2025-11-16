@@ -2,16 +2,15 @@ import ejs from 'ejs';
 import path from 'path';
 import fs from 'fs';
 
-export interface EmailTemplateData {
+interface EmailTemplateData {
   name: string;
   email: string;
-  password: string;
   companyName: string;
   loginUrl: string;
   websiteUrl: string;
   subject: string;
-  primaryColor?: string;
-  secondaryColor?: string;
+  inviteLink: string; // Add this
+  roleName?: string; // Add this (optional)
 }
 
 export interface ForgotPasswordTemplateData {
@@ -54,20 +53,24 @@ export class EmailRenderer {
       });
     });
   }
+async renderNewMemberEmail(data: Omit<EmailTemplateData, 'subject'> & { 
+  inviteLink: string; 
+  roleName?: string;
+}): Promise<{ subject: string; html: string }> {
+  const completeData: EmailTemplateData & { inviteLink: string; roleName?: string } = {
+    ...data,
+    inviteLink: data.inviteLink,
+    roleName: data.roleName || 'Member',
+    subject: `Welcome to ${data.companyName}! Set Your Password`
+  };
 
-  async renderNewMemberEmail(data: Omit<EmailTemplateData, 'subject'>): Promise<{ subject: string; html: string }> {
-    const completeData: EmailTemplateData = {
-      ...data,
-      subject: `Welcome to ${data.companyName}! Your account has been created`
-    };
+  const html = await this.renderTemplate('new-member', completeData);
 
-    const html = await this.renderTemplate('new-member', completeData);
-
-    return {
-      subject: completeData.subject,
-      html
-    };
-  }
+  return {
+    subject: completeData.subject,
+    html
+  };
+}
 
   async renderForgotPasswordEmail(data: Omit<ForgotPasswordTemplateData, 'subject'>): Promise<{ subject: string; html: string }> {
     const completeData: ForgotPasswordTemplateData = {

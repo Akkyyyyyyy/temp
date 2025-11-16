@@ -46,7 +46,7 @@
       color: #d1d5db;
     }
 
-    .credentials-card {
+    .invite-card {
       background-color: #1f232d;
       border: 1px solid #2d313d;
       border-radius: 10px;
@@ -54,7 +54,7 @@
       margin: 25px 0;
     }
 
-    .credential-item {
+    .info-item {
       display: flex;
       justify-content: space-between;
       align-items: center;
@@ -62,7 +62,7 @@
       border-bottom: 1px solid #2d313d;
     }
 
-    .credential-item:last-child {
+    .info-item:last-child {
       border-bottom: none;
     }
 
@@ -75,13 +75,16 @@
       color: #e5e7eb;
     }
 
-    .password {
-      font-family: 'Courier New', monospace;
+    .invite-link {
+      word-break: break-all;
       background: #facc1530;
-      padding: 4px 10px;
+      padding: 8px 12px;
       border-radius: 6px;
       border: 1px solid #fcd45b;
       color: #fff;
+      font-size: 14px;
+      margin-top: 10px;
+      display: none; /* Hide the link display */
     }
 
     .warning {
@@ -108,10 +111,13 @@
       font-weight: 600;
       border-radius: 10px;
       transition: all 0.3s ease;
+      font-size: 16px;
     }
 
     .button:hover {
       background-color: #eab308;
+      transform: translateY(-2px);
+      box-shadow: 0 4px 12px rgba(252, 212, 91, 0.3);
     }
 
     .footer {
@@ -128,14 +134,39 @@
       text-decoration: none;
     }
 
+    .button-container {
+      text-align: center;
+      margin: 25px 0;
+    }
+
+    .alternative-text {
+      text-align: center;
+      font-size: 14px;
+      color: #9ca3af;
+      margin-top: 20px;
+    }
+
+    .copy-instruction {
+      text-align: center;
+      font-size: 13px;
+      color: #9ca3af;
+      margin-top: 15px;
+      font-style: italic;
+    }
+
     @media (max-width: 600px) {
-      .credential-item {
+      .info-item {
         flex-direction: column;
         align-items: flex-start;
       }
 
       .value {
         margin-top: 5px;
+      }
+
+      .button {
+        padding: 14px 30px;
+        font-size: 15px;
       }
     }
   </style>
@@ -148,28 +179,28 @@
 
     <div class="content">
       <p>Hey <strong><%= name %></strong>,</p>
-      <p>Your account has been created successfully. Here are your login credentials:</p>
+      <p>You've been invited to join <strong><%= companyName %></strong> as a <strong><%= roleName %></strong>. Click the button below to set your password and get started:</p>
 
-      <div class="credentials-card">
-        <div class="credential-item">
+      <div class="invite-card">
+        <div class="info-item">
+          <span class="label">Your Role:</span>
+          <span class="value"><%= roleName %></span>
+        </div>
+        <div class="info-item">
           <span class="label">Email:</span>
           <span class="value"><%= email %></span>
-        </div>
-        <div class="credential-item">
-          <span class="label">Temporary Password:</span>
-          <span class="value password"><%= password %></span>
         </div>
       </div>
 
       <div class="warning">
-        ⚠️ Please change your password after your first login for security reasons.
+        ⚠️ This invitation link will expire in 24 hours. Please set your password immediately.
       </div>
 
       <div class="cta-button">
-        <a href="<%= loginUrl %>" class="button" target="_blank">Login to Your Account</a>
+        <a href="<%= inviteLink %>" class="button" target="_blank">Set Your Password & Get Started</a>
       </div>
 
-      <p>If you face any issues, feel free to reach out to our support team.</p>
+      <p>If you didn't expect this invitation or face any issues, please contact your administrator.</p>
     </div>
 
     <div class="footer">

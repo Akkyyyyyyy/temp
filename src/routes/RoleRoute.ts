@@ -6,10 +6,10 @@ const roleRouter = express.Router();
 
 roleRouter.post("/company",authMiddleware, RoleController.getCompanyRoles);
 roleRouter.post("/:id",authMiddleware, RoleController.getRoleById);
-roleRouter.post("/:id/usage",authMiddleware, RoleController.getRoleUsage);
+// roleRouter.post("/:id/usage",authMiddleware, RoleController.getRoleUsage);
 roleRouter.post("/",authMiddleware, RoleController.createRole);
 roleRouter.put("/:id",authMiddleware, RoleController.updateRole);
-roleRouter.delete("/:id",authMiddleware, RoleController.deleteRole);
+// roleRouter.delete("/:id",authMiddleware, RoleController.deleteRole);
 
 
 export default roleRouter;

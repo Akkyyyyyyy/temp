@@ -281,88 +281,88 @@ class GoogleCalendarController {
   };
 
   // Internal method to get member projects
-  private async getMemberProjects(memberId: string, companyId: string): Promise<IProjectAssignment[]> {
-    try {
-      // Verify company exists
-      const company = await companyRepo.findOneBy({ id: companyId });
-      if (!company) {
-        throw new Error("Company not found");
-      }
+  // private async getMemberProjects(memberId: string, companyId: string): Promise<IProjectAssignment[]> {
+  //   try {
+  //     // Verify company exists
+  //     const company = await companyRepo.findOneBy({ id: companyId });
+  //     if (!company) {
+  //       throw new Error("Company not found");
+  //     }
 
-      // Find member with assignments and projects
-      const member = await memberRepo.findOne({
-        where: {
-          id: memberId,
-          company: { id: companyId }
-        },
-        relations: [
-          "assignments",
-          "assignments.project"
-        ],
-        select: {
-          id: true,
-          name: true,
-          email: true,
-          role: true,
-          assignments: {
-            id: true,
-            role: true,
-            createdAt: true,
-            project: {
-              id: true,
-              name: true,
-              color: true,
-              startDate: true,
-              endDate: true,
-              startHour: true,
-              endHour: true,
-              location: true,
-              description: true,
-              client: true,
-              brief: true,
-              logistics: true,
-              createdAt: true
-            }
-          }
-        }
-      });
+  //     // Find member with assignments and projects
+  //     const member = await memberRepo.findOne({
+  //       where: {
+  //         id: memberId,
+  //         company: { id: companyId }
+  //       },
+  //       relations: [
+  //         "assignments",
+  //         "assignments.project"
+  //       ],
+  //       select: {
+  //         id: true,
+  //         name: true,
+  //         email: true,
+  //         role: true,
+  //         assignments: {
+  //           id: true,
+  //           role: true,
+  //           createdAt: true,
+  //           project: {
+  //             id: true,
+  //             name: true,
+  //             color: true,
+  //             startDate: true,
+  //             endDate: true,
+  //             startHour: true,
+  //             endHour: true,
+  //             location: true,
+  //             description: true,
+  //             client: true,
+  //             brief: true,
+  //             logistics: true,
+  //             createdAt: true
+  //           }
+  //         }
+  //       }
+  //     });
 
-      if (!member) {
-        throw new Error("Member not found in this company");
-      }
+  //     if (!member) {
+  //       throw new Error("Member not found in this company");
+  //     }
 
-      // Format the response
-      const projects: IProjectAssignment[] = member.assignments?.map(assignment => ({
-        id: assignment.project.id,
-        name: assignment.project.name,
-        color: assignment.project.color,
-        startDate: assignment.project.startDate,
-        endDate: assignment.project.endDate,
-        startHour: assignment.project.startHour,
-        endHour: assignment.project.endHour,
-        location: assignment.project.location,
-        description: assignment.project.description,
-        client: assignment.project.client,
-        brief: assignment.project.brief,
-        logistics: assignment.project.logistics,
-        assignmentRole: assignment.role.name,
-        assignedAt: assignment.createdAt.toISOString()
-      })) || [];
+  //     // Format the response
+  //     const projects: IProjectAssignment[] = member.assignments?.map(assignment => ({
+  //       id: assignment.project.id,
+  //       name: assignment.project.name,
+  //       color: assignment.project.color,
+  //       startDate: assignment.project.startDate,
+  //       endDate: assignment.project.endDate,
+  //       startHour: assignment.project.startHour,
+  //       endHour: assignment.project.endHour,
+  //       location: assignment.project.location,
+  //       description: assignment.project.description,
+  //       client: assignment.project.client,
+  //       brief: assignment.project.brief,
+  //       logistics: assignment.project.logistics,
+  //       assignmentRole: assignment.role.name,
+  //       assignedAt: assignment.createdAt.toISOString()
+  //     })) || [];
 
-      // Sort projects by assigned date (newest first) or start date
-      projects.sort((a, b) => {
-        const dateA = a.startDate ? new Date(a.startDate) : new Date(a.assignedAt);
-        const dateB = b.startDate ? new Date(b.startDate) : new Date(b.assignedAt);
-        return dateB.getTime() - dateA.getTime(); // Descending order
-      });
+  //     // Sort projects by assigned date (newest first) or start date
+  //     projects.sort((a, b) => {
+  //       const dateA = a.startDate ? new Date(a.startDate) : new Date(a.assignedAt);
+  //       const dateB = b.startDate ? new Date(b.startDate) : new Date(b.assignedAt);
+  //       return dateB.getTime() - dateA.getTime(); // Descending order
+  //     });
 
-      return projects;
+  //     return projects;
 
-    } catch (err) {
-      console.error("Error fetching projects by member:", err);
-      throw new Error("Failed to fetch member projects");
-    }
-  }
+  //   } catch (err) {
+  //     console.error("Error fetching projects by member:", err);
+  //     throw new Error("Failed to fetch member projects");
+  //   }
+  // }
 
   // Keep the existing endpoint method for external calls
   // public getAllProjectsByMember = async (

@@ -22,24 +22,17 @@ class ForgotPasswordController {
         res: Response
     ) => {
         try {
-            const { email, userType } = req.body;
+            const { email } = req.body;
 
-            if (!email || !userType) {
+            if (!email) {
                 return res.status(400).json({ message: "Email and user type are required" });
             }
 
-            if (!['company', 'member'].includes(userType)) {
-                return res.status(400).json({ message: "User type must be either 'company' or 'member'" });
-            }
-
-            let user;
-            if (userType === 'company') {
-                const companyRepo = AppDataSource.getRepository(Company);
-                user = await companyRepo.findOne({ where: { email } });
-            } else {
-                const memberRepo = AppDataSource.getRepository(Member);
-                user = await memberRepo.findOne({ where: { email },  relations: ["company"], });
-            }
+            const memberRepo = AppDataSource.getRepository(Member);
+            const user = await memberRepo.findOne({
+                where: { email },
+                relations: ['companyMembers', 'companyMembers.company', 'companyMembers.role']
+            });
 
             if (!user) {
                 return res.status(200).json({
@@ -54,7 +47,6 @@ class ForgotPasswordController {
                 {
                     email,
                     otp,
-                    userType,
                     type: 'password_reset'
                 },
                 this.JWT_SECRET,
@@ -66,7 +58,7 @@ class ForgotPasswordController {
                     await sendForgotPasswordEmail(
                         email,
                         otp,
-                        user.company.name,
+                        'VIP',
                         '15 minutes'
                     );
                 } else {
@@ -81,9 +73,9 @@ class ForgotPasswordController {
                     console.log(`Reset token: ${resetToken}`);
                 }
                 return res.status(400).json({
-                success: false,
-                message: "Error while sending OTP"
-            });
+                    success: false,
+                    message: "Error while sending OTP"
+                });
             }
 
             return res.status(200).json({
@@ -104,20 +96,17 @@ class ForgotPasswordController {
         res: Response
     ) => {
         try {
-            const { email, otp, token, userType } = req.body;
+            const { email, otp, token } = req.body;
 
-            if (!email || !otp || !token || !userType) {
+            if (!email || !otp || !token) {
                 return res.status(400).json({ message: "Email, OTP, token, and user type are required" });
             }
 
-            if (!['company', 'member'].includes(userType)) {
-                return res.status(400).json({ message: "User type must be either 'company' or 'member'" });
-            }
 
             try {
                 const decoded = jwt.verify(token, this.JWT_SECRET) as IPasswordResetToken;
 
-                if (decoded.type !== 'password_reset' || decoded.email !== email || decoded.userType !== userType) {
+                if (decoded.type !== 'password_reset' || decoded.email !== email) {
                     return res.status(400).json({ message: "Invalid token" });
                 }
 
@@ -128,7 +117,6 @@ class ForgotPasswordController {
                 const verifiedToken = jwt.sign(
                     {
                         email,
-                        userType,
                         type: 'password_reset_verified',
                         verifiedAt: Date.now()
                     },
@@ -182,34 +170,30 @@ class ForgotPasswordController {
                     return res.status(400).json({ message: "Invalid token type" });
                 }
 
-                const { email, userType } = decoded;
+                const { email } = decoded;
 
-                if (userType === 'member') {
-                    const memberRepo = AppDataSource.getRepository(Member);
-                    const member = await memberRepo.findOne({ where: { email } });
+                const memberRepo = AppDataSource.getRepository(Member);
+                const member = await memberRepo.findOne({ where: { email } });
 
-                    if (!member) {
-                        return res.status(400).json({ message: "Member not found" });
-                    }
-
-                    // Check if new password is different from current password
-                    const isSamePassword = await bcrypt.compare(
-                        String(newPassword),
-                        String(member.passwordHash)
-                    );
-
-                    if (isSamePassword) {
-                        return res.status(400).json({ message: "New password must be different from current password" });
-                    }
-
-                    const passwordHash = await bcrypt.hash(newPassword, 10);
-                    member.passwordHash = passwordHash;
-                    member.updatedAt = new Date();
-                    member.isMemberPassword = true;
-                    await memberRepo.save(member);
-                } else {
-                    return res.status(400).json({ message: "Invalid user type" });
+                if (!member) {
+                    return res.status(400).json({ message: "Member not found" });
                 }
+
+                // Check if new password is different from current password
+                const isSamePassword = await bcrypt.compare(
+                    String(newPassword),
+                    String(member.passwordHash)
+                );
+
+                if (isSamePassword) {
+                    return res.status(400).json({ message: "New password must be different from current password" });
+                }
+
+                const passwordHash = await bcrypt.hash(newPassword, 10);
+                member.passwordHash = passwordHash;
+                member.updatedAt = new Date();
+                await memberRepo.save(member);
+
 
                 return res.status(200).json({
                     success: true,

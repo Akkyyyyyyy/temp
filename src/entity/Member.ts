@@ -15,6 +15,7 @@ import { ProjectAssignment } from "./ProjectAssignment";
 import { GoogleToken } from "./GoogleToken";
 import { Package } from "./Package";
 import { Role } from "./Role";
+import { CompanyMember } from "./CompanyMember";
 
 export interface IMember {
   id: string; // UUID
@@ -27,15 +28,14 @@ export interface IMember {
   bio?: string | null;
   skills?: string[];
   passwordHash?: string | null;
-  isMemberPassword?: boolean;
-  role?: Role | null;
-  isAdmin: boolean;
-  company: Company[];
+  // role?: Role | null;
+  // isAdmin: boolean;
   assignments?: ProjectAssignment[];
   countryCode: string;
   createdAt: Date;
   updatedAt: Date;
   ringColor?: string | null;
+  companyMembers?: CompanyMember[];
 }
 
 @Entity()
@@ -76,22 +76,11 @@ export class Member implements IMember {
   @Column({ nullable: true })
   passwordHash: string;
 
-  @Column({ default: false })
-  isMemberPassword: boolean;
-
   @Column({ default: true })
   active: boolean;
 
-  @ManyToOne(() => Role, (role) => role.members, { onDelete: "RESTRICT", nullable: true })
-  @JoinColumn()
-  role?: Role | null;
-
-  @Column({ default: false })
-  isAdmin: boolean;
-
-  @ManyToMany(() => Company, (company) => company.members, { cascade: true })
-  @JoinTable()
-  company: Company[];
+  @OneToMany(() => CompanyMember, (companyMember) => companyMember.member)
+  companyMembers: CompanyMember[];
 
   @OneToMany(() => ProjectAssignment, (assignment) => assignment.member)
   assignments: ProjectAssignment[];

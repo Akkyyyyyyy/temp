@@ -161,69 +161,69 @@ class RoleController {
   };
 
   // Delete role within company
-  public deleteRole = async (req: Request, res: Response) => {
-    try {
-      const { id } = req.params;
-      const { companyId } = req.body;
+  // public deleteRole = async (req: Request, res: Response) => {
+  //   try {
+  //     const { id } = req.params;
+  //     const { companyId } = req.body;
 
-      if (!companyId) {
-        return res.status(400).json({
-          error: "Company ID is required",
-          code: "MISSING_COMPANY_ID"
-        });
-      }
+  //     if (!companyId) {
+  //       return res.status(400).json({
+  //         error: "Company ID is required",
+  //         code: "MISSING_COMPANY_ID"
+  //       });
+  //     }
 
-      await this.roleService.deleteForCompany(id, companyId);
-      res.status(204).send();
-    } catch (error) {
-      console.error("Error deleting role:", error);
+  //     await this.roleService.deleteForCompany(id, companyId);
+  //     res.status(204).send();
+  //   } catch (error) {
+  //     console.error("Error deleting role:", error);
 
-      if (error instanceof Error) {
-        if (error.message === "Role not found") {
-          return res.status(404).json({
-            error: "Role not found",
-            code: "ROLE_NOT_FOUND"
-          });
-        }
+  //     if (error instanceof Error) {
+  //       if (error.message === "Role not found") {
+  //         return res.status(404).json({
+  //           error: "Role not found",
+  //           code: "ROLE_NOT_FOUND"
+  //         });
+  //       }
 
-        if (error.message.includes("assigned to") && error.message.includes("cannot be deleted")) {
-          return res.status(409).json({
-            error: error.message,
-            code: "ROLE_IN_USE"
-          });
-        }
-      }
+  //       if (error.message.includes("assigned to") && error.message.includes("cannot be deleted")) {
+  //         return res.status(409).json({
+  //           error: error.message,
+  //           code: "ROLE_IN_USE"
+  //         });
+  //       }
+  //     }
 
-      res.status(500).json({
-        error: "Failed to delete role",
-        code: "DELETE_ROLE_ERROR"
-      });
-    }
-  };
+  //     res.status(500).json({
+  //       error: "Failed to delete role",
+  //       code: "DELETE_ROLE_ERROR"
+  //     });
+  //   }
+  // };
 
   // Get role usage within company
-  public getRoleUsage = async (req: Request, res: Response) => {
-    try {
-      const { id } = req.params;
-      const { companyId } = req.body;
+  // public getRoleUsage = async (req: Request, res: Response) => {
+  //   try {
+  //     const { id } = req.params;
+  //     const { companyId } = req.body;
 
-      if (!companyId) {
-        return res.status(400).json({
-          error: "Company ID is required",
-          code: "MISSING_COMPANY_ID"
-        });
-      }
+  //     if (!companyId) {
+  //       return res.status(400).json({
+  //         error: "Company ID is required",
+  //         code: "MISSING_COMPANY_ID"
+  //       });
+  //     }
 
-      const usage = await this.roleService.getRoleUsageCountForCompany(id, companyId);
-      res.status(200).json(usage);
-    } catch (error) {
-      console.error("Error fetching role usage:", error);
-      res.status(500).json({
-        error: "Failed to fetch role usage",
-        code: "FETCH_USAGE_ERROR"
-      });
-    }
-  };
+  //     const usage = await this.roleService.getRoleUsageCountForCompany(id, companyId);
+  //     res.status(200).json(usage);
+  //   } catch (error) {
+  //     console.error("Error fetching role usage:", error);
+  //     res.status(500).json({
+  //       error: "Failed to fetch role usage",
+  //       code: "FETCH_USAGE_ERROR"
+  //     });
+  //   }
+  // };
 
   // Create default roles for a company
   public createDefaultRoles = async (req: Request, res: Response) => {

@@ -6,6 +6,7 @@ import bcrypt from "bcryptjs";
 import jwt from "jsonwebtoken";
 import { transporter } from "../../utils/mailer";
 import { Member } from "../../entity/Member";
+import { CompanyMember } from "../../entity/CompanyMember";
 
 
 class CompanyController {
@@ -23,11 +24,15 @@ class CompanyController {
             }
             const companyRepo = AppDataSource.getRepository(Company);
             const memberRepo = AppDataSource.getRepository(Member);
-            const existing = await memberRepo.findOne({ where: { email } });
-            if (existing) {
+            const companyMemberRepo = AppDataSource.getRepository(CompanyMember);
+            
+            const existingCompany = await companyRepo.findOne({ where: { email } });
+            if (existingCompany) {
                 res.status(409).json({ message: "Email already in use" });
                 return;
             }
+            const existingMember = await memberRepo.findOne({ where: { email } });
+            let adminMember: Member;
             const passwordHash = await bcrypt.hash(password, 10);
             const country = 'UK'
             const newCompany = companyRepo.create({
@@ -39,15 +44,26 @@ class CompanyController {
             await companyRepo.save(newCompany);
             const adminName = name + " Admin"
 
-            const adminMember = memberRepo.create({
-                name: adminName,
-                email,
-                passwordHash,
-                company: [newCompany],
+            if (existingMember) {
+                existingMember.passwordHash = passwordHash;
+                adminMember = await memberRepo.save(existingMember);
+            } else {
+                adminMember = memberRepo.create({
+                    name: adminName,
+                    email,
+                    passwordHash
+                });
+                await memberRepo.save(adminMember);
+            }
+            
+            const companyMember = companyMemberRepo.create({
+                company: newCompany,
+                member: adminMember,
                 isAdmin: true,
-                isMemberPassword: true,
-            });
-            await memberRepo.save(adminMember);
+                // role can be null for admin or set a default admin role if you have one
+            });            
+
+            await companyMemberRepo.save(companyMember);
             return res.status(201).json({ message: "Company registered successfully", });
         } catch (error) {
             console.error(error);
@@ -70,11 +86,11 @@ class CompanyController {
 
             const memberRepo = AppDataSource.getRepository(Member);
             const companyRepo = AppDataSource.getRepository(Company);
+            const companyMemberRepo = AppDataSource.getRepository(CompanyMember);
 
             // 🔍 Find member
             const member = await memberRepo.findOne({
                 where: { id: memberId },
-                relations: ["company"],
             });
 
             if (!member) {
@@ -93,11 +109,15 @@ class CompanyController {
 
             await companyRepo.save(newCompany);
 
-            // 🧩 Add this company to the member
-            if (!member.company) member.company = [];
-            member.company.push(newCompany);
-            await memberRepo.save(member);
+            const companyMember = companyMemberRepo.create({
+                company: newCompany,
+                member: member,
+                isAdmin: true, // Member becomes admin of their own company
+                active: true, //
+                // role can be set to null or create a default admin role
+            });
 
+            await companyMemberRepo.save(companyMember);
             return res.status(201).json({
                 success: true,
                 message: "Company created successfully",
@@ -132,11 +152,15 @@ class CompanyController {
 
             const memberRepo = AppDataSource.getRepository(Member);
             const companyRepo = AppDataSource.getRepository(Company);
-
+            const companyMemberRepo = AppDataSource.getRepository(CompanyMember);
             // 🔍 Find member with all companies and role
             const member = await memberRepo.findOne({
                 where: { id: memberId },
-                relations: ["company", "role"],
+                relations: [
+                    "companyMembers",
+                    "companyMembers.company",
+                    "companyMembers.role"
+                ],
             });
 
             if (!member) {
@@ -147,28 +171,42 @@ class CompanyController {
             }
 
             // ✅ Check if this member belongs to the given company
-            const currentCompany = member.company?.find((c) => c.id === companyId);
-            if (!currentCompany) {
+            const currentCompanyMember = member.companyMembers?.find(
+                (cm) => cm.company.id === companyId
+            );
+
+            if (!currentCompanyMember) {
                 return res.status(403).json({
                     success: false,
                     message: "Member does not belong to this company",
                 });
             }
-            const associatedCompanies =
-                member.company?.map((c) => ({
-                    id: c.id,
-                    name: c.name,
-                    email: c.email,
-                })) ?? [];
+
+            // ✅ Get the company details
+            const currentCompany = await companyRepo.findOneBy({ id: companyId });
+            if (!currentCompany) {
+                return res.status(404).json({
+                    success: false,
+                    message: "Company not found",
+                });
+            }
+            const associatedCompanies = member.companyMembers?.map((cm) => ({
+                id: cm.company.id,
+                name: cm.company.name,
+                email: cm.company.email,
+                isAdmin: cm.isAdmin, // Include admin status for each company
+                role: cm.role ? cm.role.name : null,
+            })) ?? [];
 
             // ✅ Generate JWT like memberLogin
-            const type = member.isAdmin ? "admin" : "member";
+            const type = currentCompanyMember.isAdmin ? "admin" : "member";
             const token = jwt.sign(
                 {
                     memberId: member.id,
                     companyId: currentCompany.id,
                     userType: type,
-                    isAdmin: member.isAdmin ?? false,
+                    isAdmin: currentCompanyMember.isAdmin,
+                    companyMemberId: currentCompanyMember.id, // Include company member relation ID
                 },
                 process.env.JWT_SECRET!,
                 { expiresIn: "1d" }
@@ -179,8 +217,8 @@ class CompanyController {
                 id: member.id,
                 name: member.name,
                 email: member.email,
-                role: member.role ? member.role.name : null,
-                isAdmin: member.isAdmin ?? false,
+                role: currentCompanyMember.role ? currentCompanyMember.role.name : null,
+                isAdmin: currentCompanyMember.isAdmin,
                 userType: type,
                 location: member.location ?? null,
                 company: {

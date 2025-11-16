@@ -11,6 +11,7 @@ import { Member } from "./Member";
 import { Project } from "./Project";
 import { Role } from "./Role";
 import { Package } from "./Package";
+import { CompanyMember } from "./CompanyMember";
 
 export interface ICompany {
   id: string;
@@ -38,8 +39,8 @@ export class Company implements ICompany {
   @Column()
   country: string;
 
-  @ManyToMany(() => Member, (member) => member.company)
-  members: Member[];
+  @OneToMany(() => CompanyMember, (companyMember) => companyMember.company)
+  companyMembers: CompanyMember[];
   
   @OneToMany(() => Project, (project) => project.company)
   projects: Project[];

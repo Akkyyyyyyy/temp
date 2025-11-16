@@ -5,11 +5,12 @@ export interface ICreateMemberRequest {
   email: string;
   roleId: string;
   companyId: string;
-  countryCode:string;
-  phone:string;
-  location?:string;
-  bio?:string;
-  skills?:string[];
+  countryCode: string;
+  phone: string;
+  location?: string;
+  bio?: string;
+  skills?: string[];
+  isAdmin?: boolean;
 }
 export interface ICreateMemberResponse {
   success: Boolean;
@@ -46,6 +47,9 @@ export interface IMemberResponse {
   bio: string;
   skills: string[];
   companyId: string;
+  companyMemberId: string;
+  isInvited: boolean, 
+  isOwner:boolean,
   projects?: IProjectResponse[];
 }
 
@@ -74,7 +78,9 @@ export interface IUpdateMemberRequest {
   bio?: string | null;
   skills?: string[];
   profilePhoto?: string | null;
+  isAdmin?: boolean;
   roleId?: string;
+  ringColor?: string;
 }
 
 export interface IUpdateMemberResponse {
@@ -104,10 +110,13 @@ export interface IConflict {
 
 export interface IAvailableMemberResponse {
   id: string;
-  profilePhoto:string,
+  profilePhoto: string,
   name: string;
   email: string;
   role: string;
+  roleId: string;
+  isAdmin: boolean;
+  companyMemberId: string;
   phone: string;
   countryCode: string;
   location: string;
@@ -130,7 +139,10 @@ export interface IUpdateRingColorResponse {
 export interface IToggleMemberStatusResponse {
   success: boolean;
   message: string;
-  member?: Member;
+  member?: Member & {
+    active?: boolean;
+    companyMemberId?: string;
+  };
   newStatus: boolean;
 }
 
@@ -195,6 +207,10 @@ export interface IToggleAdminRequest {
 export interface IToggleAdminResponse {
   success: boolean;
   message: string;
-  member?: Member;
+  member?: Member & {
+    isAdmin?: boolean;
+    active?: boolean;
+    companyMemberId?: string;
+  };
   isAdmin: boolean;
 }

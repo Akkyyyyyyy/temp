@@ -11,6 +11,7 @@ import {
 import { Member } from "./Member";
 import { ProjectAssignment } from "./ProjectAssignment";
 import { Company } from "./Company";
+import { CompanyMember } from "./CompanyMember";
 
 export interface IRole {
   id: string;
@@ -20,6 +21,8 @@ export interface IRole {
   company?: Company;
   createdAt: Date;
   updatedAt: Date;
+  companyMembers: CompanyMember[];
+  assignments: ProjectAssignment[];
 }
 
 @Entity()
@@ -40,8 +43,8 @@ export class Role implements IRole {
   @JoinColumn({ name: "companyId" })
   company: Company;
 
-  @OneToMany(() => Member, (member) => member.role)
-  members: Member[];
+  @OneToMany(() => CompanyMember, (companyMember) => companyMember.role)
+  companyMembers: CompanyMember[];
 
   @OneToMany(() => ProjectAssignment, (assignment) => assignment.role)
   assignments: ProjectAssignment[];

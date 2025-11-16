@@ -107,7 +107,7 @@ class ProjectController {
 
                     // Verify member exists and belongs to company
                     const member = await memberRepo.findOne({
-                        where: { id: memberId, company: { id: companyId } }
+                        where: { id: memberId }
                     });
 
                     if (!member) {
@@ -888,7 +888,6 @@ class ProjectController {
             const member = await memberRepo.findOne({
                 where: {
                     id: memberId,
-                    company: { id: project.company.id }
                 },
                 relations: ["company"]
             });

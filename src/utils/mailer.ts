@@ -21,21 +21,22 @@ export const sendEmail = async (to: string, subject: string, html: string) => {
 export const sendNewMemberEmail = async (
   to: string,
   name: string,
-  password: string,
-  companyName: string
+  inviteLink: string, // Changed from password to inviteLink
+  companyName: string,
+  roleName?: string // Added optional role name
 ) => {
   const { subject, html } = await emailRenderer.renderNewMemberEmail({
     name,
     email: to,
-    password,
+    inviteLink, // Pass inviteLink instead of password
     companyName,
+    roleName: roleName || 'Member', // Include role name
     loginUrl: process.env.VITE_FRONTEND_URL,
     websiteUrl: process.env.VITE_FRONTEND_URL
   });
 
   await sendEmail(to, subject, html);
 };
-
 
 export const sendForgotPasswordEmail = async (
   to: string,
