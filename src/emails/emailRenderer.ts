@@ -11,6 +11,7 @@ interface EmailTemplateData {
   subject: string;
   inviteLink: string; // Add this
   roleName?: string; // Add this (optional)
+  adminName:string;
 }
 
 export interface ForgotPasswordTemplateData {
@@ -61,7 +62,7 @@ async renderNewMemberEmail(data: Omit<EmailTemplateData, 'subject'> & {
     ...data,
     inviteLink: data.inviteLink,
     roleName: data.roleName || 'Member',
-    subject: `Welcome to ${data.companyName}! Set Your Password`
+    subject: `Welcome to ${data.companyName}!`
   };
 
   const html = await this.renderTemplate('new-member', completeData);

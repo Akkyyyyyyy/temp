@@ -4,11 +4,13 @@ import * as dotenv from "dotenv";
 import { Company } from "../entity/Company";
 import { Member } from "../entity/Member";
 import { Project } from "../entity/Project";
-import { ProjectAssignment } from "../entity/ProjectAssignment";
+// import { ProjectAssignment } from "../entity/ProjectAssignment";
 import { GoogleToken } from "../entity/GoogleToken";
 import { Package } from "../entity/Package";
 import { Role } from "../entity/Role";
 import { CompanyMember } from "../entity/CompanyMember";
+import { Events } from "../entity/Events";
+import { EventAssignment } from "../entity/EventAssignment";
 
 
 export const AppDataSource = new DataSource({
@@ -20,7 +22,7 @@ export const AppDataSource = new DataSource({
     database: process.env.DB_DATABASE,
     synchronize: true,
     logging: false,
-    entities: [Company, Member, CompanyMember, Project, ProjectAssignment, GoogleToken, Package, Role],
+    entities: [Company, Member, CompanyMember, Project, Events, EventAssignment, GoogleToken, Package, Role],
     migrations: [],
     subscribers: [],
     // ssl: {

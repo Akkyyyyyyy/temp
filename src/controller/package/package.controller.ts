@@ -1,9 +1,9 @@
 import { Request, Response } from "express";
-import { 
-  ICreatePackageRequest, 
-  IUpdatePackageRequest, 
-  IPackageResponse, 
-  IPackageListResponse 
+import {
+  ICreatePackageRequest,
+  IUpdatePackageRequest,
+  IPackageResponse,
+  IPackageListResponse
 } from "./type";
 import { AppDataSource } from "../../config/data-source";
 import { Package } from "../../entity/Package";
@@ -17,15 +17,15 @@ class PackageController {
     res: Response<IPackageResponse>
   ) => {
     try {
-      const { 
-        name, 
-        price, 
-        duration, 
-        isPopular, 
-        features, 
-        addons, 
-        status, 
-        companyId 
+      const {
+        name,
+        price,
+        duration,
+        isPopular,
+        features,
+        addons,
+        status,
+        companyId
       } = req.body;
 
       // Validate required fields
@@ -87,7 +87,7 @@ class PackageController {
   ) => {
     try {
       const packageRepo = AppDataSource.getRepository(Package);
-      
+
       const packages = await packageRepo.find({
         relations: ["company"],
         order: { createdAt: "DESC" }
@@ -210,7 +210,6 @@ class PackageController {
     }
   };
 
-  // Get packages by member ID
   public getPackagesByCompany = async (
     req: Request<{ companyId: string }>,
     res: Response<IPackageListResponse>
@@ -219,19 +218,151 @@ class PackageController {
       const { companyId } = req.params;
 
       const packageRepo = AppDataSource.getRepository(Package);
+      const companyRepo = AppDataSource.getRepository(Company);
+
+      // Get packages for the specific company
       const packages = await packageRepo.find({
         where: { company: { id: companyId } },
         relations: ["company"],
         order: { createdAt: "DESC" }
       });
 
+      // Get the company's price separately to ensure we have it even if no packages exist
+      const company = await companyRepo.findOne({
+        where: { id: companyId },
+        select: ["price"]
+      });
+
+      const companyPrice = company?.price || null;
+
       return res.status(200).json({
         message: "Packages retrieved successfully",
-        packages
+        packages,
+        companyPrice // Add company price to response
       });
     } catch (error) {
-      console.error("Error fetching packages by member:", error);
-      res.status(500).json({ message: "An error occurred while fetching packages", packages: [] });
+      console.error("Error fetching packages by company:", error);
+      res.status(500).json({
+        message: "An error occurred while fetching packages",
+        packages: [],
+        companyPrice: null
+      });
+    }
+  };
+  // Set/Add company price
+  public setCompanyPrice = async (
+    req: Request<{ companyId: string }>,
+    res: Response<{ message: string; company?: Company }>
+  ) => {
+    try {
+      const { companyId } = req.params;
+      const { price } = req.body;
+
+      // Validate price
+      if (price === undefined || price === null) {
+        return res.status(400).json({ message: "Price is required" });
+      }
+
+      if (typeof price !== "number" || price < 0) {
+        return res.status(400).json({ message: "Price must be a positive number" });
+      }
+
+      const companyRepo = AppDataSource.getRepository(Company);
+
+      // Find the company
+      const company = await companyRepo.findOne({
+        where: { id: companyId }
+      });
+
+      if (!company) {
+        return res.status(404).json({ message: "Company not found" });
+      }
+
+      // Update the company price
+      company.price = price;
+      await companyRepo.save(company);
+
+      return res.status(200).json({
+        message: "Company price set successfully",
+        company
+      });
+    } catch (error) {
+      console.error("Error setting company price:", error);
+      res.status(500).json({ message: "An error occurred while setting company price" });
+    }
+  };
+  // Update company price
+  public updateCompanyPrice = async (
+    req: Request<{ companyId: string }>,
+    res: Response<{ message: string; company?: Company }>
+  ) => {
+    try {
+      const { companyId } = req.params;
+      const { price } = req.body;
+
+      // Validate price
+      if (price === undefined || price === null) {
+        return res.status(400).json({ message: "Price is required" });
+      }
+
+      if (typeof price !== "number" || price < 0) {
+        return res.status(400).json({ message: "Price must be a positive number" });
+      }
+
+      const companyRepo = AppDataSource.getRepository(Company);
+
+      // Find the company
+      const company = await companyRepo.findOne({
+        where: { id: companyId }
+      });
+
+      if (!company) {
+        return res.status(404).json({ message: "Company not found" });
+      }
+
+      // Update the company price
+      company.price = price;
+      const updatedCompany = await companyRepo.save(company);
+
+      return res.status(200).json({
+        message: "Company price updated successfully",
+        company: updatedCompany
+      });
+    } catch (error) {
+      console.error("Error updating company price:", error);
+      res.status(500).json({ message: "An error occurred while updating company price" });
+    }
+  };
+  // Remove/Reset company price
+  public removeCompanyPrice = async (
+    req: Request<{ companyId: string }>,
+    res: Response<{ message: string; company?: Company }>
+  ) => {
+    try {
+      const { companyId } = req.params;
+
+      const companyRepo = AppDataSource.getRepository(Company);
+
+      // Find the company
+      const company = await companyRepo.findOne({
+        where: { id: companyId }
+      });
+
+      if (!company) {
+        return res.status(404).json({ message: "Company not found" });
+      }
+
+      // Set price to null
+      company.price = null;
+      const updatedCompany = await companyRepo.save(company);
+
+      return res.status(200).json({
+        message: "Company price removed successfully",
+        company: updatedCompany
+      });
+    } catch (error) {
+      console.error("Error removing company price:", error);
+      res.status(500).json({ message: "An error occurred while removing company price" });
     }
   };
 }

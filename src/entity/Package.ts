@@ -33,7 +33,7 @@ export class Package implements IPackage {
   @Column()
   name: string;
 
-  @Column("decimal", { precision: 10, scale: 2 })
+  @Column("decimal", { scale: 2 })
   price: number;
 
   @Column()

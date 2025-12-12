@@ -1,21 +1,22 @@
 import { Request, Response } from "express";
-
-import { IGetAllProjectsByMemberRequest, IGetAllProjectsByMemberResponse, IProjectAssignment } from "./types";
 import { AppDataSource } from "../../config/data-source";
 import { Member } from "../../entity/Member";
 import { Company } from "../../entity/Company";
 import GoogleCalendarService from "../../utils/GoogleCalendarService";
-import { ProjectAssignment } from "../../entity/ProjectAssignment";
+import { EventAssignment } from "../../entity/EventAssignment";
+import { Events } from "../../entity/Events";
 
 const memberRepo = AppDataSource.getRepository(Member);
 const companyRepo = AppDataSource.getRepository(Company);
+const assignmentRepo = AppDataSource.getRepository(EventAssignment);
+const eventsRepo = AppDataSource.getRepository(Events);
 
 class GoogleCalendarController {
   // Initiate Google OAuth flow
   public initiateAuth = async (req: Request, res: Response) => {
     try {
       const memberId = req.body.memberId;
-      
+
       if (!memberId) {
         return res.status(400).json({
           success: false,
@@ -40,11 +41,65 @@ class GoogleCalendarController {
 
   // Handle OAuth callback
   public handleCallback = async (req: Request, res: Response) => {
-  try {
-    const { code, state } = req.query;
+    try {
+      const { code, state } = req.query;
 
-    if (!code || !state) {
-      console.error('❌ Missing code or state parameters');
+      if (!code || !state) {
+        console.error('❌ Missing code or state parameters');
+        return res.send(`
+          <html>
+            <body>
+              <script>
+                window.opener.postMessage({ 
+                  type: "GOOGLE_AUTH_ERROR", 
+                  success: false, 
+                  error: "Missing authentication parameters" 
+                }, "*");
+                window.close();
+              </script>
+            </body>
+          </html>
+        `);
+      }
+
+      const result = await GoogleCalendarService.handleCallback(
+        code as string,
+        state as string
+      );
+
+      if (result.success) {
+        return res.send(`
+          <html>
+            <body>
+              <script>
+                window.opener.postMessage({ 
+                  type: "GOOGLE_AUTH_SUCCESS", 
+                  success: true, 
+                  message: "${result.message}" 
+                }, "*");
+                window.close();
+              </script>
+            </body>
+          </html>
+        `);
+      } else {
+        return res.send(`
+          <html>
+            <body>
+              <script>
+                window.opener.postMessage({ 
+                  type: "GOOGLE_AUTH_ERROR", 
+                  success: false, 
+                  error: "${result.message}" 
+                }, "*");
+                window.close();
+              </script>
+            </body>
+          </html>
+        `);
+      }
+    } catch (error: any) {
+      console.error('💥 OAuth Callback Error:', error);
       return res.send(`
         <html>
           <body>
@@ -52,7 +107,7 @@ class GoogleCalendarController {
               window.opener.postMessage({ 
                 type: "GOOGLE_AUTH_ERROR", 
                 success: false, 
-                error: "Missing authentication parameters" 
+                error: "${error.message || 'Authentication failed'}" 
               }, "*");
               window.close();
             </script>
@@ -60,68 +115,13 @@ class GoogleCalendarController {
         </html>
       `);
     }
-
-    const result = await GoogleCalendarService.handleCallback(
-      code as string,
-      state as string
-    );
-
-    if (result.success) {
-      return res.send(`
-        <html>
-          <body>
-            <script>
-              window.opener.postMessage({ 
-                type: "GOOGLE_AUTH_SUCCESS", 
-                success: true, 
-                message: "${result.message}" 
-              }, "*");
-              window.close();
-            </script>
-          </body>
-        </html>
-      `);
-    } else {
-      return res.send(`
-        <html>
-          <body>
-            <script>
-              window.opener.postMessage({ 
-                type: "GOOGLE_AUTH_ERROR", 
-                success: false, 
-                error: "${result.message}" 
-              }, "*");
-              window.close();
-            </script>
-          </body>
-        </html>
-      `);
-    }
-  } catch (error: any) {
-    console.error('💥 OAuth Callback Error:', error);
-    return res.send(`
-      <html>
-        <body>
-          <script>
-            window.opener.postMessage({ 
-              type: "GOOGLE_AUTH_ERROR", 
-              success: false, 
-              error: "${error.message || 'Authentication failed'}" 
-            }, "*");
-            window.close();
-          </script>
-        </body>
-      </html>
-    `);
-  }
-};
-
+  };
 
   // Check if user has Google auth
   public checkAuth = async (req: Request, res: Response) => {
     try {
       const memberId = req.body.memberId;
-      
+
       if (!memberId) {
         return res.status(400).json({
           success: false,
@@ -130,7 +130,7 @@ class GoogleCalendarController {
       }
 
       const hasAuth = await GoogleCalendarService.hasGoogleAuth(memberId);
-      
+
       return res.status(200).json({
         success: true,
         hasAuth
@@ -144,13 +144,14 @@ class GoogleCalendarController {
     }
   };
 
-  // Sync all projects to calendar
- public syncProjects = async (req: Request, res: Response) => {
+  // In GoogleCalendarController.ts - Update the syncEventAssignments method
+
+  // Sync all event assignments to calendar
+  public syncEventAssignments = async (req: Request, res: Response) => {
     try {
       const memberId = req.body.memberId || res.locals.token?.memberId;
-      const companyId = req.body.companyId || res.locals.token?.companyId;
-      
-      if (!memberId || !companyId) {
+
+      if (!memberId) {
         return res.status(400).json({
           success: false,
           message: "Member ID and Company ID are required"
@@ -166,25 +167,51 @@ class GoogleCalendarController {
         });
       }
 
-      // Get ProjectAssignment repository
-      const assignmentRepo = AppDataSource.getRepository(ProjectAssignment);
-      
-      // Fetch assignments for this member in the company
+      // Fetch event assignments for this member in the company
       const assignments = await assignmentRepo.find({
         where: {
           member: { id: memberId },
-          project: {
-            company: { id: companyId }
-          }
         },
         relations: [
-          "project",
-          "project.company",
+          "events",
+          "events.project",
+          "events.project.company",  // Keep company for filtering
+          "role",
           "member"
         ],
+        // Remove "events.project.client" since it's optional and might not exist
+        select: {
+          id: true,
+          instructions: true,
+          googleEventId: true,
+          events: {
+            id: true,
+            name: true,
+            date: true,
+            startHour: true,
+            endHour: true,
+            location: true,
+            project: {
+              id: true,
+              name: true,
+              description: true,
+              client: true,
+              company: {     
+                id: true,
+                name: true,
+                email: true,
+                country: true
+              }
+            }
+          },
+          role: {
+            id: true,
+            name: true
+          }
+        },
         order: {
-          project: {
-            startDate: "DESC"
+          events: {
+            date: "DESC"
           }
         }
       });
@@ -192,23 +219,23 @@ class GoogleCalendarController {
       if (assignments.length === 0) {
         return res.status(200).json({
           success: true,
-          message: "No project assignments found to sync",
+          message: "No event assignments found to sync",
           synced: 0,
           failed: 0
         });
       }
 
-      // Sync each project assignment
+      // Sync each event assignment
       let synced = 0;
       let failed = 0;
       const results = [];
 
       for (const assignment of assignments) {
         try {
-          const result = await GoogleCalendarService.syncProjectToCalendar(
-            memberId, 
-            assignment.project, // Pass the project from assignment
-            assignment.id // Pass the assignmentId
+          const result = await GoogleCalendarService.syncEventToCalendar(
+            memberId,
+            assignment.events,
+            assignment.id
           );
 
           if (result.success) {
@@ -217,21 +244,31 @@ class GoogleCalendarController {
             failed++;
           }
 
+          // Safely get project name
+          const projectName = assignment.events.project?.name || 'No Project';
+          const clientName = assignment.events.project?.client?.name || 'N/A';
+          const companyName = assignment.events.project?.company?.name || 'No Company';
+
           results.push({
-            projectId: assignment.project.id,
-            projectName: assignment.project.name,
+            eventId: assignment.events.id,
+            eventName: assignment.events.name,
+            projectId: assignment.events.project?.id,
+            projectName: projectName,
+            clientName: clientName,
+            companyName: companyName,
             assignmentId: assignment.id,
             success: result.success,
             message: result.message,
             googleEventId: result.eventId,
-            role: assignment.role.name
+            role: assignment.role?.name || 'No Role',
+            date: assignment.events.date
           });
 
         } catch (error: any) {
           failed++;
           results.push({
-            projectId: assignment.project.id,
-            projectName: assignment.project.name,
+            eventId: assignment.events.id,
+            eventName: assignment.events.name,
             assignmentId: assignment.id,
             success: false,
             message: error.message
@@ -241,17 +278,210 @@ class GoogleCalendarController {
 
       return res.status(200).json({
         success: true,
-        message: `Sync completed`,
+        message: `Sync completed: ${synced} events synced, ${failed} failed`,
         synced,
         failed,
         results
       });
 
     } catch (error: any) {
-      console.error('Error syncing projects:', error);
+      console.error('Error syncing event assignments:', error);
       return res.status(500).json({
         success: false,
-        message: error.message || "Failed to sync projects"
+        message: error.message || "Failed to sync events"
+      });
+    }
+  };
+
+
+  public syncSingleEventAssignment = async (req: Request, res: Response) => {
+    try {
+      const memberId = req.body.memberId || res.locals.token?.memberId;
+      const assignmentId = req.params.assignmentId;
+
+      if (!memberId || !assignmentId) {
+        return res.status(400).json({
+          success: false,
+          message: "Member ID and Assignment ID are required"
+        });
+      }
+
+      const hasAuth = await GoogleCalendarService.hasGoogleAuth(memberId);
+      if (!hasAuth) {
+        return res.status(400).json({
+          success: false,
+          message: "Google Calendar not connected. Please connect first."
+        });
+      }
+
+      const assignment = await assignmentRepo.findOne({
+        where: {
+          id: assignmentId,
+          member: { id: memberId }
+        },
+        relations: [
+          "events",
+          "events.project",
+          "role"
+        ],
+        select: {
+          id: true,
+          googleEventId: true,
+          events: {
+            id: true,
+            name: true,
+            date: true,
+            startHour: true,
+            endHour: true,
+            location: true,
+            project: {
+              id: true,
+              name: true,
+              description: true,
+              client: true
+            }
+          },
+          role: {
+            id: true,
+            name: true
+          }
+        }
+      });
+
+      if (!assignment) {
+        return res.status(404).json({
+          success: false,
+          message: "Event assignment not found"
+        });
+      }
+
+      // Sync the event
+      const result = await GoogleCalendarService.syncEventToCalendar(
+        memberId,
+        assignment.events,
+        assignment.id
+      );
+
+      return res.status(200).json({
+        success: result.success,
+        message: result.message,
+        googleEventId: result.eventId,
+        eventId: assignment.events.id,
+        eventName: assignment.events.name,
+        assignmentId: assignment.id
+      });
+
+    } catch (error: any) {
+      console.error('Error syncing single event assignment:', error);
+      return res.status(500).json({
+        success: false,
+        message: error.message || "Failed to sync event"
+      });
+    }
+  };
+
+  public updateEvent = async (req: Request, res: Response) => {
+    try {
+      const memberId = req.body.memberId || res.locals.token?.memberId;
+      const eventId = req.params.eventId;
+      const googleEventId = req.body.googleEventId;
+
+      if (!memberId || !eventId) {
+        return res.status(400).json({
+          success: false,
+          message: "Member ID and Event ID are required"
+        });
+      }
+
+      // Check if member has Google auth
+      const hasAuth = await GoogleCalendarService.hasGoogleAuth(memberId);
+      if (!hasAuth) {
+        return res.status(400).json({
+          success: false,
+          message: "Google Calendar not connected. Please connect first."
+        });
+      }
+
+      // Fetch the event
+      const event = await eventsRepo.findOne({
+        where: { id: eventId },
+        relations: ["project", "project.client"]
+      });
+
+      if (!event) {
+        return res.status(404).json({
+          success: false,
+          message: "Event not found"
+        });
+      }
+
+      // Update the event in Google Calendar
+      const result = await GoogleCalendarService.editCalendarEvent(
+        memberId,
+        event,
+        googleEventId
+      );
+
+      return res.status(200).json({
+        success: result.success,
+        message: result.message,
+        googleEventId: result.eventId,
+        eventId: event.id,
+        eventName: event.name
+      });
+
+    } catch (error: any) {
+      console.error('Error updating event:', error);
+      return res.status(500).json({
+        success: false,
+        message: error.message || "Failed to update event"
+      });
+    }
+  };
+
+  // DELETE EVENT FROM GOOGLE CALENDAR
+  public deleteEvent = async (req: Request, res: Response) => {
+    try {
+      const memberId = req.body.memberId || res.locals.token?.memberId;
+      const googleEventId = req.params.googleEventId;
+
+      if (!memberId || !googleEventId) {
+        return res.status(400).json({
+          success: false,
+          message: "Member ID and Google Event ID are required"
+        });
+      }
+
+      // Check if member has Google auth
+      const hasAuth = await GoogleCalendarService.hasGoogleAuth(memberId);
+      if (!hasAuth) {
+        return res.status(400).json({
+          success: false,
+          message: "Google Calendar not connected. Please connect first."
+        });
+      }
+
+      // Delete the event from Google Calendar
+      const result = await GoogleCalendarService.deleteCalendarEvent(
+        memberId,
+        googleEventId
+      );
+
+      // Clear googleEventId from any assignments that reference this event
+      if (result.success) {
+        await assignmentRepo.update(
+          { googleEventId },
+          { googleEventId: null }
+        );
+      }
+
+      return res.status(200).json(result);
+
+    } catch (error: any) {
+      console.error('Error deleting event:', error);
+      return res.status(500).json({
+        success: false,
+        message: error.message || "Failed to delete event"
       });
     }
   };
@@ -260,7 +490,7 @@ class GoogleCalendarController {
   public disconnect = async (req: Request, res: Response) => {
     try {
       const memberId = req.body.memberId || res.locals.token?.memberId;
-      
+
       if (!memberId) {
         return res.status(400).json({
           success: false,
@@ -269,7 +499,7 @@ class GoogleCalendarController {
       }
 
       const result = await GoogleCalendarService.disconnect(memberId);
-      
+
       return res.status(200).json(result);
     } catch (error) {
       console.error('Error disconnecting:', error);
@@ -280,139 +510,95 @@ class GoogleCalendarController {
     }
   };
 
-  // Internal method to get member projects
-  // private async getMemberProjects(memberId: string, companyId: string): Promise<IProjectAssignment[]> {
-  //   try {
-  //     // Verify company exists
-  //     const company = await companyRepo.findOneBy({ id: companyId });
-  //     if (!company) {
-  //       throw new Error("Company not found");
-  //     }
+  // GET ALL EVENT ASSIGNMENTS FOR MEMBER (for debugging/info)
+  public getEventAssignments = async (req: Request, res: Response) => {
+    try {
+      const memberId = req.body.memberId || res.locals.token?.memberId;
+      const companyId = req.body.companyId || res.locals.token?.companyId;
 
-  //     // Find member with assignments and projects
-  //     const member = await memberRepo.findOne({
-  //       where: {
-  //         id: memberId,
-  //         company: { id: companyId }
-  //       },
-  //       relations: [
-  //         "assignments",
-  //         "assignments.project"
-  //       ],
-  //       select: {
-  //         id: true,
-  //         name: true,
-  //         email: true,
-  //         role: true,
-  //         assignments: {
-  //           id: true,
-  //           role: true,
-  //           createdAt: true,
-  //           project: {
-  //             id: true,
-  //             name: true,
-  //             color: true,
-  //             startDate: true,
-  //             endDate: true,
-  //             startHour: true,
-  //             endHour: true,
-  //             location: true,
-  //             description: true,
-  //             client: true,
-  //             brief: true,
-  //             logistics: true,
-  //             createdAt: true
-  //           }
-  //         }
-  //       }
-  //     });
+      if (!memberId || !companyId) {
+        return res.status(400).json({
+          success: false,
+          message: "Member ID and Company ID are required"
+        });
+      }
 
-  //     if (!member) {
-  //       throw new Error("Member not found in this company");
-  //     }
+      const assignments = await assignmentRepo.find({
+        where: {
+          member: { id: memberId },
+          events: {
+            project: {
+              company: { id: companyId }
+            }
+          }
+        },
+        relations: [
+          "events",
+          "events.project",
+          "events.project.client",
+          "role"
+        ],
+        select: {
+          id: true,
+          instructions: true,
+          googleEventId: true,
+          createdAt: true,
+          events: {
+            id: true,
+            name: true,
+            date: true,
+            startHour: true,
+            endHour: true,
+            location: true,
+          },
+          role: {
+            id: true,
+            name: true
+          },
+          project: {
+            id: true,
+            name: true
+          }
+        },
+        order: {
+          events: {
+            date: "DESC"
+          }
+        }
+      });
 
-  //     // Format the response
-  //     const projects: IProjectAssignment[] = member.assignments?.map(assignment => ({
-  //       id: assignment.project.id,
-  //       name: assignment.project.name,
-  //       color: assignment.project.color,
-  //       startDate: assignment.project.startDate,
-  //       endDate: assignment.project.endDate,
-  //       startHour: assignment.project.startHour,
-  //       endHour: assignment.project.endHour,
-  //       location: assignment.project.location,
-  //       description: assignment.project.description,
-  //       client: assignment.project.client,
-  //       brief: assignment.project.brief,
-  //       logistics: assignment.project.logistics,
-  //       assignmentRole: assignment.role.name,
-  //       assignedAt: assignment.createdAt.toISOString()
-  //     })) || [];
+      return res.status(200).json({
+        success: true,
+        assignments: assignments.map(assignment => ({
+          assignmentId: assignment.id,
+          googleEventId: assignment.googleEventId,
+          event: {
+            id: assignment.events.id,
+            name: assignment.events.name,
+            date: assignment.events.date,
+            startHour: assignment.events.startHour,
+            endHour: assignment.events.endHour,
+            location: assignment.events.location,
+          },
+          role: assignment.role?.name,
+          project: assignment.events.project ? {
+            id: assignment.events.project.id,
+            name: assignment.events.project.name
+          } : null,
+          instructions: assignment.instructions,
+          isSynced: !!assignment.googleEventId
+        })),
+        totalCount: assignments.length
+      });
 
-  //     // Sort projects by assigned date (newest first) or start date
-  //     projects.sort((a, b) => {
-  //       const dateA = a.startDate ? new Date(a.startDate) : new Date(a.assignedAt);
-  //       const dateB = b.startDate ? new Date(b.startDate) : new Date(b.assignedAt);
-  //       return dateB.getTime() - dateA.getTime(); // Descending order
-  //     });
-
-  //     return projects;
-
-  //   } catch (err) {
-  //     console.error("Error fetching projects by member:", err);
-  //     throw new Error("Failed to fetch member projects");
-  //   }
-  // }
-
-  // Keep the existing endpoint method for external calls
-  // public getAllProjectsByMember = async (
-  //   req: Request<{}, {}, IGetAllProjectsByMemberRequest>,
-  //   res: Response<IGetAllProjectsByMemberResponse>
-  // ) => {
-  //   try {
-  //     const { memberId, companyId } = req.body;
-
-  //     // Validate required fields
-  //     if (!memberId || !companyId) {
-  //       return res.status(400).json({
-  //         success: false,
-  //         message: "Member ID and Company ID are required",
-  //         projects: [],
-  //         totalCount: 0
-  //       });
-  //     }
-
-  //     const projects = await this.getMemberProjects(memberId, companyId);
-
-  //     // Find member for response
-  //     const member = await memberRepo.findOne({
-  //       where: { id: memberId },
-  //       select: ['id', 'name', 'email', 'role']
-  //     });
-
-  //     return res.status(200).json({
-  //       success: true,
-  //       message: `Projects retrieved successfully for ${member?.name || 'member'}`,
-  //       projects,
-  //       totalCount: projects.length,
-  //       member: member ? {
-  //         id: member.id,
-  //         name: member.name,
-  //         email: member.email,
-  //         role: member.role
-  //       } : undefined
-  //     });
-
-  //   } catch (err: any) {
-  //     console.error("Error fetching projects by member:", err);
-  //     return res.status(500).json({
-  //       success: false,
-  //       message: err.message || "Server error while fetching projects",
-  //       projects: [],
-  //       totalCount: 0
-  //     });
-  //   }
-  // };
+    } catch (error: any) {
+      console.error('Error fetching event assignments:', error);
+      return res.status(500).json({
+        success: false,
+        message: error.message || "Failed to fetch event assignments"
+      });
+    }
+  };
 }
 
 export default new GoogleCalendarController();

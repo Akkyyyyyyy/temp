@@ -23,13 +23,17 @@ import { AppDataSource } from "../../config/data-source";
 import { Project } from "../../entity/Project";
 import { Company } from "../../entity/Company";
 import { Member } from "../../entity/Member";
-import { ProjectAssignment } from "../../entity/ProjectAssignment";
+// import { ProjectAssignment } from "../../entity/ProjectAssignment";
 import { Role } from "../../entity/Role";
 import GoogleCalendarService from "../../utils/GoogleCalendarService";
+import { CompanyMember } from "../../entity/CompanyMember";
+import { In, QueryRunner, Repository } from "typeorm";
+import { Events } from "../../entity/Events";
+import { EventAssignment } from "../../entity/EventAssignment";
 
 class ProjectController {
     public createProject = async (
-        req: Request<{}, {}, ICreateProjectRequest>,
+        req: Request<{}, {}, any>,
         res: Response<ICreateProjectResponse>
     ) => {
         const queryRunner = AppDataSource.createQueryRunner();
@@ -40,18 +44,13 @@ class ProjectController {
             const {
                 name,
                 color,
-                startDate,
-                endDate,
-                startHour,
-                endHour,
                 location,
                 description,
                 companyId,
                 client,
-                reminders,
-                assignments = []
+                events = []
             } = req.body;
-            
+
             // Enhanced validation
             if (!name?.trim()) {
                 return res.status(400).json({ success: false, message: "Project name is required" });
@@ -60,109 +59,87 @@ class ProjectController {
             const companyRepo = queryRunner.manager.getRepository(Company);
             const memberRepo = queryRunner.manager.getRepository(Member);
             const projectRepo = queryRunner.manager.getRepository(Project);
-            const assignmentRepo = queryRunner.manager.getRepository(ProjectAssignment);
+            const eventsRepo = queryRunner.manager.getRepository(Events);
+            const eventAssignmentRepo = queryRunner.manager.getRepository(EventAssignment);
             const roleRepo = queryRunner.manager.getRepository(Role);
-
 
             const companyEnt = await companyRepo.findOne({ where: { id: companyId } });
             if (!companyEnt) {
                 return res.status(404).json({ success: false, message: "Company not found" });
             }
-            
+
             // 1. Create the project
             const newProject = projectRepo.create({
                 name: name.trim(),
                 color: color.trim(),
-                startDate,
-                endDate,
-                startHour,
-                endHour,
-                location: location.trim(),
                 description: description?.trim() || "",
                 client: client ? {
-                    name: client.name.trim(),
-                    email: client.email.trim(),
-                    mobile: client.mobile.trim(),
-                    cc: client.cc
+                    name: client.name?.trim() || '',
+                    email: client.email?.trim() || '',
+                    mobile: client.mobile?.trim() || '',
+                    cc: client.cc || ''
                 } : null,
-                reminders: reminders || { weekBefore: true, dayBefore: true },
                 company: companyEnt
             });
 
             await projectRepo.save(newProject);
 
-            // 2. Handle member assignments with validation
-            const validAssignments: ProjectAssignment[] = [];
-            const invalidMemberIds: string[] = [];
-            const invalidRoleIds: string[] = [];
+            // 2. Create events for the project
+            const createdEvents: Events[] = [];
 
-            if (assignments.length > 0) {
-                for (const assignment of assignments) {
-                    const { memberId, roleId, instructions } = assignment;
+            if (events.length > 0) {
 
-                    if (!memberId || !roleId) {
-                        console.warn(`Skipping assignment with missing memberId or roleId:`, assignment);
-                        continue;
+                for (const eventData of events) {
+                    const {
+                        name: eventName,
+                        date,
+                        startHour: eventStartHour,
+                        endHour: eventEndHour,
+                        location: eventLocation,
+                        reminders: eventReminders,
+                        assignments = [] // Get assignments from the event object
+                    } = eventData;
+
+                    // Validate event data
+                    if (!date) {
+                        throw new Error("Event date is required for all events");
                     }
 
-                    // Verify member exists and belongs to company
-                    const member = await memberRepo.findOne({
-                        where: { id: memberId }
+                    if (eventStartHour === undefined || eventEndHour === undefined) {
+                        throw new Error("Event start hour and end hour are required");
+                    }
+
+                    // Create event
+                    const newEvent = eventsRepo.create({
+                        name: eventName?.trim() || `${name.trim()} - Event`,
+                        date: date,
+                        startHour: eventStartHour,
+                        endHour: eventEndHour,
+                        location: eventLocation?.trim() || location?.trim() || '',
+                        reminders: eventReminders || { weekBefore: true, dayBefore: true },
+                        project: newProject
                     });
 
-                    if (!member) {
-                        invalidMemberIds.push(memberId);
-                        console.warn(`Member with ID ${memberId} not found in company ${companyId}, skipping.`);
-                        continue;
+                    const savedEvent = await eventsRepo.save(newEvent);
+                    createdEvents.push(savedEvent);
+
+                    // Handle event assignments from the event object
+                    if (assignments.length > 0) {
+                        await this.handleEventAssignments(
+                            assignments,
+                            savedEvent,
+                            companyId,
+                            memberRepo,
+                            roleRepo,
+                            eventAssignmentRepo,
+                            queryRunner
+                        );
+                    } else {
+                        console.log(`No assignments found for event ${eventData.id}`);
                     }
-
-                    // Verify role exists and belongs to company
-                    const roleEntity = await roleRepo.findOne({
-                        where: { id: roleId, company: { id: companyId } }
-                    });
-
-                    if (!roleEntity) {
-                        invalidRoleIds.push(roleId);
-                        console.warn(`Role with ID '${roleId}' not found or doesn't belong to company, skipping assignment for member ${memberId}`);
-                        continue;
-                    }
-
-                    const projectAssignment = assignmentRepo.create({
-                        member,
-                        project: newProject,
-                        role: roleEntity,
-                        instructions: instructions?.trim() || null
-                    });
-
-                    let googleEventId;
-                    const hasAuth = await GoogleCalendarService.hasGoogleAuth(memberId);
-                    if (hasAuth) {
-                        const googleEvent = await GoogleCalendarService.syncProjectToCalendar(memberId, newProject);
-                        googleEventId = googleEvent.eventId;
-                    }
-                    if (googleEventId) {
-                        projectAssignment.googleEventId = googleEventId;
-                    }
-
-                    validAssignments.push(projectAssignment);
-                }
-
-                // Save all valid assignments at once
-                if (validAssignments.length > 0) {
-                    await assignmentRepo.save(validAssignments);
-                } else {
-                    console.warn('No valid assignments were created');
-                }
-
-                // Log any invalid assignments
-                if (invalidMemberIds.length > 0) {
-                    console.warn(`Invalid member IDs: ${invalidMemberIds.join(', ')}`);
-                }
-                if (invalidRoleIds.length > 0) {
-                    console.warn(`Invalid role IDs: ${invalidRoleIds.join(', ')}`);
                 }
             } else {
-                console.log('No assignments provided in request');
+                throw new Error("At least one event is required to create a project");
             }
 
             await queryRunner.commitTransaction();
@@ -179,136 +156,278 @@ class ProjectController {
 
             return res.status(500).json({
                 success: false,
-                message: "An internal server error occurred while creating the project"
+                message: error.message || "An internal server error occurred while creating the project"
             });
         } finally {
             await queryRunner.release();
         }
     };
 
-    public getProjectById = async (
-    req: Request<{ projectId: string }, {}, {}>,
-    res: Response<IGetProjectByIdResponse>
-) => {
-    try {
-        const { projectId } = req.params;
+    // Helper method to handle event assignments
+    public handleEventAssignments = async (
+        assignments: any[],
+        event: Events,
+        companyId: string,
+        memberRepo: Repository<Member>,
+        roleRepo: Repository<Role>,
+        eventAssignmentRepo: Repository<EventAssignment>,
+        queryRunner: QueryRunner
+    ) => {
+        const validAssignments: EventAssignment[] = [];
+        const invalidMemberIds: string[] = [];
+        const invalidRoleIds: string[] = [];
 
-        // Validation
-        if (!projectId?.trim()) {
-            return res.status(400).json({
-                success: false,
-                message: "Project ID is required"
+        for (const assignment of assignments) {
+            const { memberId, roleId, instructions } = assignment;
+
+            if (!memberId || !roleId) {
+                console.warn(`Skipping assignment with missing memberId or roleId:`, assignment);
+                continue;
+            }
+
+            // Verify member exists
+            const member = await memberRepo.findOne({
+                where: { id: memberId }
             });
-        }
 
-        const projectRepo = AppDataSource.getRepository(Project);
+            if (!member) {
+                invalidMemberIds.push(memberId);
+                console.warn(`Member with ID ${memberId} not found, skipping.`);
+                continue;
+            }
 
-        // Get project with all relations
-        const project = await projectRepo.findOne({
-            where: { id: projectId },
-            relations: [
-                "company",
-                "assignments",
-                "assignments.member", 
-                "assignments.role"
-            ],
-            select: {
-                id: true,
-                name: true,
-                color: true,
-                startDate: true,
-                endDate: true,
-                startHour: true,
-                endHour: true,
-                location: true,
-                description: true,
-                client: true,
-                brief: true,
-                logistics: true,
-                createdAt: true,
-                updatedAt: true,
-                company: {
-                    id: true,
-                    name: true
-                },
-                assignments: {
-                    id: true,
-                    googleEventId: true,
-                    member: {
-                        id: true,
-                        name: true,
-                        email: true,
-                        profilePhoto: true,
-                        ringColor:true
-                    },
-                    role: {
-                        id: true,
-                        name: true
-                    }
+            // Verify role exists and belongs to company
+            const roleEntity = await roleRepo.findOne({
+                where: { id: roleId, company: { id: companyId } }
+            });
+
+            if (!roleEntity) {
+                invalidRoleIds.push(roleId);
+                console.warn(`Role with ID '${roleId}' not found or doesn't belong to company, skipping assignment for member ${memberId}`);
+                continue;
+            }
+
+            const eventAssignment = eventAssignmentRepo.create({
+                member,
+                events: event,
+                role: roleEntity,
+                instructions: instructions?.trim() || null
+            });
+
+            let googleEventId;
+            const hasAuth = await GoogleCalendarService.hasGoogleAuth(memberId);
+            if (hasAuth) {
+                const googleEvent = await GoogleCalendarService.syncEventToCalendar(
+                    memberId,
+                    event,
+                    eventAssignment.id
+                );
+                if (googleEvent.success && googleEvent.eventId) {
+                    googleEventId = googleEvent.eventId;
                 }
             }
-        });
+            if (googleEventId) {
+                eventAssignment.googleEventId = googleEventId;
+            }
 
-        if (!project) {
-            return res.status(404).json({
+            validAssignments.push(eventAssignment);
+        }
+
+        // Save all valid assignments at once
+        if (validAssignments.length > 0) {
+            await eventAssignmentRepo.save(validAssignments);
+        } else {
+            console.warn('No valid assignments were created for event:', event.id);
+        }
+
+        // Log any invalid assignments
+        if (invalidMemberIds.length > 0) {
+            console.warn(`Invalid member IDs: ${invalidMemberIds.join(', ')}`);
+        }
+        if (invalidRoleIds.length > 0) {
+            console.warn(`Invalid role IDs: ${invalidRoleIds.join(', ')}`);
+        }
+    };
+
+    public getProjectById = async (
+        req: Request<{ projectId: string }, {}, {}>,
+        res: Response<IGetProjectByIdResponse>
+    ) => {
+        try {
+            const { projectId } = req.params;
+            const companyId = res.locals.token?.companyId;
+
+            // Validation
+            if (!projectId?.trim()) {
+                return res.status(400).json({
+                    success: false,
+                    message: "Project ID is required"
+                });
+            }
+
+            const projectRepo = AppDataSource.getRepository(Project);
+            const companyMemberRepo = AppDataSource.getRepository(CompanyMember);
+
+            // Get project with all relations - UPDATED for new flow
+            const project = await projectRepo.findOne({
+                where: { id: projectId },
+                relations: [
+                    "company",
+                    "events", // Get all events
+                    "events.assignments", // Get assignments for each event
+                    "events.assignments.member",
+                    "events.assignments.role"
+                ],
+                select: {
+                    id: true,
+                    name: true,
+                    color: true,
+                    description: true,
+                    client: true,
+                    brief: true,
+                    logistics: true,
+                    checklist: true,
+                    equipments: true,
+                    moodBoard: true,
+                    createdAt: true,
+                    updatedAt: true,
+                    company: {
+                        id: true,
+                        name: true
+                    },
+                    events: {
+                        id: true,
+                        name: true,
+                        date: true,
+                        startHour: true,
+                        endHour: true,
+                        location: true,
+                        reminders: true,
+                        createdAt: true,
+                        updatedAt: true,
+                        assignments: {
+                            id: true,
+                            googleEventId: true,
+                            instructions: true,
+                            member: {
+                                id: true,
+                                email: true,
+                            },
+                            role: {
+                                id: true,
+                                name: true
+                            }
+                        }
+                    }
+                }
+            });
+
+            if (!project) {
+                return res.status(404).json({
+                    success: false,
+                    message: "Project not found"
+                });
+            }
+
+            // Get company-specific member details for all event assignments
+            const eventsWithCompanyDetails = await Promise.all(
+                project.events.map(async (event) => {
+                    const assignmentsWithCompanyDetails = await Promise.all(
+                        event.assignments.map(async (assignment) => {
+                            // Find the company member relationship to get company-specific details
+                            const companyMember = await companyMemberRepo.findOne({
+                                where: {
+                                    member: { id: assignment.member.id },
+                                    company: { id: project.company.id }
+                                },
+                                relations: ["member", "role"],
+                                select: {
+                                    id: true,
+                                    name: true,
+                                    profilePhoto: true,
+                                    ringColor: true,
+                                    role: {
+                                        id: true,
+                                        name: true
+                                    },
+                                    member: {
+                                        id: true,
+                                        email: true
+                                    }
+                                }
+                            });
+
+                            return {
+                                id: assignment.id,
+                                member: {
+                                    id: assignment.member.id,
+                                    name: companyMember?.name,
+                                    email: assignment.member.email,
+                                    profilePhoto: companyMember?.profilePhoto || null,
+                                    ringColor: companyMember?.ringColor || null
+                                },
+                                role: {
+                                    id: assignment.role?.id,
+                                    name: assignment.role?.name
+                                },
+                                instructions: assignment.instructions,
+                                googleEventId: assignment.googleEventId || undefined
+                            };
+                        })
+                    );
+
+                    return {
+                        id: event.id,
+                        name: event.name,
+                        date: event.date,
+                        startHour: event.startHour,
+                        endHour: event.endHour,
+                        location: event.location,
+                        reminders: event.reminders,
+                        assignments: assignmentsWithCompanyDetails,
+                        createdAt: event.createdAt,
+                        updatedAt: event.updatedAt
+                    };
+                })
+            );
+
+            // Transform the response to ensure consistent data structure
+            const transformedProject = {
+                id: project.id,
+                name: project.name,
+                color: project.color,
+                description: project.description,
+                client: project.client,
+                brief: project.brief || [],
+                logistics: project.logistics || [],
+                checklist: project.checklist || [],
+                equipments: project.equipments || [],
+                moodBoard: project.moodBoard || { folders: {}, uploads: {} },
+                company: {
+                    id: project.company.id,
+                    name: project.company.name
+                },
+                events: eventsWithCompanyDetails, // Now events contain assignments
+                createdAt: project.createdAt,
+                updatedAt: project.updatedAt
+            };
+
+            return res.status(200).json({
+                success: true,
+                project: transformedProject
+            });
+
+        } catch (error) {
+            console.error("Error fetching project:", error);
+            return res.status(500).json({
                 success: false,
-                message: "Project not found"
+                message: "An internal server error occurred while fetching the project"
             });
         }
-        
-        // Transform the response to ensure consistent data structure
-        const transformedProject = {
-            id: project.id,
-            name: project.name,
-            color: project.color,
-            startDate: project.startDate,
-            endDate: project.endDate,
-            startHour: project.startHour,
-            endHour: project.endHour,
-            location: project.location,
-            description: project.description,
-            client: project.client,
-            brief: project.brief || [],
-            logistics: project.logistics || [],
-            company: {
-                id: project.company.id,
-                name: project.company.name
-            },
-            assignments: project.assignments?.map(assignment => ({
-                id: assignment.id,
-                member: {
-                    id: assignment.member.id,
-                    name: assignment.member.name,
-                    email: assignment.member.email,
-                    profilePhoto: assignment.member.profilePhoto,
-                    ringColor: assignment.member.ringColor
-                },
-                role: {
-                    id: assignment.role?.id,
-                    name: assignment.role?.name
-                },
-                googleEventId: assignment.googleEventId || undefined
-            })) || [],
-            createdAt: project.createdAt,
-            updatedAt: project.updatedAt
-        };
-
-        return res.status(200).json({
-            success: true,
-            project: transformedProject
-        });
-
-    } catch (error) {
-        console.error("Error fetching project:", error);
-        return res.status(500).json({
-            success: false,
-            message: "An internal server error occurred while fetching the project"
-        });
-    }
     };
 
     public editProject = async (
-        req: Request<{}, {}, IEditProjectRequest>,
+        req: Request<{}, {}, any>,
         res: Response<IEditProjectResponse>
     ) => {
         const queryRunner = AppDataSource.createQueryRunner();
@@ -320,13 +439,9 @@ class ProjectController {
                 projectId,
                 name,
                 color,
-                startDate,
-                endDate,
-                startHour,
-                endHour,
-                location,
                 description,
                 client,
+                events = [],
                 isScheduleUpdate
             } = req.body;
 
@@ -339,12 +454,20 @@ class ProjectController {
             }
 
             const projectRepo = queryRunner.manager.getRepository(Project);
-            const assignmentRepo = queryRunner.manager.getRepository(ProjectAssignment);
+            const eventsRepo = queryRunner.manager.getRepository(Events);
+            const eventAssignmentRepo = queryRunner.manager.getRepository(EventAssignment);
+            const memberRepo = queryRunner.manager.getRepository(Member);
+            const roleRepo = queryRunner.manager.getRepository(Role);
 
-            // Verify project exists
             const existingProject = await projectRepo.findOne({
                 where: { id: projectId },
-                relations: ["company", "assignments", "assignments.member"]
+                relations: [
+                    "company",
+                    "events",
+                    "events.assignments",
+                    "events.assignments.member",
+                    "events.assignments.role"
+                ]
             });
 
             if (!existingProject) {
@@ -354,71 +477,11 @@ class ProjectController {
                 });
             }
 
-            // Validate dates if provided
-            if (startDate && endDate) {
-                const start = new Date(startDate);
-                const end = new Date(endDate);
-                if (start > end) {
-                    return res.status(400).json({
-                        success: false,
-                        message: "End date cannot be before start date"
-                    });
-                }
-            }
-
-            // Validate hours if provided
-            if (startHour !== undefined || endHour !== undefined) {
-                const finalStartHour = startHour !== undefined ? startHour : existingProject.startHour;
-                const finalEndHour = endHour !== undefined ? endHour : existingProject.endHour;
-
-                if (finalStartHour < 0 || finalStartHour > 24 * 60) {
-                    return res.status(400).json({
-                        success: false,
-                        message: "Start hour out of valid range (0 - 1440 minutes)"
-                    });
-                }
-
-                if (finalEndHour < 0 || finalEndHour > 24 * 60) {
-                    return res.status(400).json({
-                        success: false,
-                        message: "End hour out of valid range (0 - 1440 minutes)"
-                    });
-                }
-
-                if (finalStartHour >= finalEndHour) {
-                    return res.status(400).json({
-                        success: false,
-                        message: "Start hour must be before end hour"
-                    });
-                }
-            }
-
-            if (isScheduleUpdate && (startDate || endDate || startHour !== undefined || endHour !== undefined)) {
-                const conflicts = await this.checkScheduleConflicts(
-                    projectId,
-                    existingProject.assignments || [],
-                    startDate || existingProject.startDate,
-                    endDate || existingProject.endDate,
-                    startHour !== undefined ? startHour : existingProject.startHour,
-                    endHour !== undefined ? endHour : existingProject.endHour,
-                    assignmentRepo
-                );
-
-                if (conflicts.length > 0) {
-                    return res.status(409).json({
-                        success: false,
-                        message: "Your assigned team member ain't available on this new Schedule",
-                        conflicts: conflicts
-                    });
-                }
-            }
             // Validate client data if provided
             if (client !== undefined) {
                 if (client === null) {
-                    // Clear client information
                     existingProject.client = null;
                 } else {
-                    // Validate client object
                     if (!client.name?.trim()) {
                         return res.status(400).json({
                             success: false,
@@ -438,7 +501,6 @@ class ProjectController {
                         });
                     }
 
-                    // Basic email validation
                     const emailRegex = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
                     if (!emailRegex.test(client.email)) {
                         return res.status(400).json({
@@ -447,7 +509,6 @@ class ProjectController {
                         });
                     }
 
-                    // Basic mobile validation
                     const mobileRegex = /^[+]?[\d\s\-()]+$/;
                     if (!mobileRegex.test(client.mobile)) {
                         return res.status(400).json({
@@ -460,83 +521,129 @@ class ProjectController {
                         name: client.name.trim(),
                         email: client.email.trim(),
                         mobile: client.mobile.trim(),
+                        cc: client.cc
                     };
                 }
             }
+            if (name !== undefined && existingProject.name !== name.trim()) {
+                existingProject.name = name.trim();
 
+                // Save the project first
+                await projectRepo.save(existingProject);
+
+                // Then update Google Calendar for all events
+                await this.updateGoogleCalendarForAllProjectEvents(existingProject, eventsRepo, eventAssignmentRepo);
+            }
             // Update project fields if provided
             if (name !== undefined) existingProject.name = name.trim();
             if (color !== undefined) existingProject.color = color.trim();
-            if (startDate !== undefined) existingProject.startDate = startDate;
-            if (endDate !== undefined) existingProject.endDate = endDate;
-            if (startHour !== undefined) existingProject.startHour = startHour;
-            if (endHour !== undefined) existingProject.endHour = endHour;
-            if (location !== undefined) existingProject.location = location.trim();
             if (description !== undefined) existingProject.description = description?.trim() || "";
+
+            // Handle events updates
+            if (events.length > 0) {
+                const existingEventsMap = new Map(existingProject.events.map(event => [event.id, event]));
+                const eventsToKeep: string[] = [];
+
+                for (const eventData of events) {
+                    let event: Events;
+
+                    if (eventData.id && existingEventsMap.has(eventData.id)) {
+                        // Update existing event
+                        event = existingEventsMap.get(eventData.id)!;
+                        eventsToKeep.push(eventData.id);
+                    } else {
+                        // Create new event
+                        event = eventsRepo.create({
+                            project: existingProject
+                        });
+                    }
+
+                    // Validate and update event name
+                    if (eventData.name !== undefined) {
+                        if (!eventData.name.trim()) {
+                            return res.status(400).json({
+                                success: false,
+                                message: "Event name is required"
+                            });
+                        }
+                        event.name = eventData.name.trim();
+                    }
+
+                    // Validate event data
+                    if (eventData.date !== undefined) {
+                        if (!eventData.date.trim()) {
+                            return res.status(400).json({
+                                success: false,
+                                message: "Event date is required"
+                            });
+                        }
+                        event.date = eventData.date;
+                    }
+
+                    if (eventData.startHour !== undefined) {
+                        if (eventData.startHour < 0 || eventData.startHour > 24 * 60) {
+                            return res.status(400).json({
+                                success: false,
+                                message: "Start hour out of valid range (0 - 1440 minutes)"
+                            });
+                        }
+                        event.startHour = eventData.startHour;
+                    }
+
+                    if (eventData.endHour !== undefined) {
+                        if (eventData.endHour < 0 || eventData.endHour > 24 * 60) {
+                            return res.status(400).json({
+                                success: false,
+                                message: "End hour out of valid range (0 - 1440 minutes)"
+                            });
+                        }
+                        event.endHour = eventData.endHour;
+                    }
+
+                    if (eventData.startHour !== undefined && eventData.endHour !== undefined) {
+                        if (eventData.startHour >= eventData.endHour) {
+                            return res.status(400).json({
+                                success: false,
+                                message: "Start hour must be before end hour"
+                            });
+                        }
+                    }
+
+                    if (eventData.location !== undefined) event.location = eventData.location.trim();
+                    if (eventData.reminders !== undefined) event.reminders = eventData.reminders;
+
+                    // Save the event first
+                    await eventsRepo.save(event);
+
+                    // Handle event assignments with schedule conflict checking
+                    if (eventData.assignments !== undefined) {
+                        await this.handleEventAssignmentsUpdate(
+                            event,
+                            eventData.assignments,
+                            existingProject.company.id,
+                            memberRepo,
+                            roleRepo,
+                            eventAssignmentRepo,
+                            queryRunner,
+                            isScheduleUpdate
+                        );
+                    }
+
+                    // Update Google Calendar for all assignments in this event
+                    await this.updateGoogleCalendarForEvent(event, existingProject, eventAssignmentRepo);
+                }
+
+                // Remove events that weren't included in the update
+                const eventsToRemove = existingProject.events.filter(event => !eventsToKeep.includes(event.id));
+                for (const eventToRemove of eventsToRemove) {
+                    // Remove associated assignments first
+                    await eventAssignmentRepo.delete({ events: { id: eventToRemove.id } });
+                    await eventsRepo.remove(eventToRemove);
+                }
+            }
 
             // Update timestamps
             existingProject.updatedAt = new Date();
-
-            const scheduleChanged =
-                startDate !== undefined ||
-                endDate !== undefined ||
-                startHour !== undefined ||
-                endHour !== undefined ||
-                name !== undefined ||
-                location !== undefined;
-
-            if (scheduleChanged && existingProject.assignments) {
-                const updatePromises = existingProject.assignments.map(async (assignment) => {
-                    if (assignment.googleEventId) {
-                        try {
-                            await GoogleCalendarService.editCalendarEvent(
-                                assignment.member.id,
-                                existingProject,
-                                assignment.googleEventId
-                            );
-                            // console.log(`✅ Updated calendar event for member ${assignment.member.id}`);
-                        } catch (error) {
-                            console.error(`Failed to update calendar for member ${assignment.member.id}:`, error);
-                            // If event not found, try to create new one
-                            if (error.message.includes('not found') || error.code === 404) {
-                                try {
-                                    const syncResult = await GoogleCalendarService.syncProjectToCalendar(
-                                        assignment.member.id,
-                                        existingProject
-                                    );
-                                    if (syncResult.success && syncResult.eventId) {
-                                        assignment.googleEventId = syncResult.eventId;
-                                        await assignmentRepo.save(assignment);
-                                        // console.log(`✅ Created new calendar event for member ${assignment.member.id}`);
-                                    }
-                                } catch (createError) {
-                                    console.error(`Failed to create new calendar event for member ${assignment.member.id}:`, createError);
-                                }
-                            }
-                        }
-                    } else {
-                        // Create new event if doesn't exist but member has auth
-                        try {
-                            const hasAuth = await GoogleCalendarService.hasGoogleAuth(assignment.member.id);
-                            if (hasAuth) {
-                                const syncResult = await GoogleCalendarService.syncProjectToCalendar(
-                                    assignment.member.id,
-                                    existingProject
-                                );
-                                if (syncResult.success && syncResult.eventId) {
-                                    assignment.googleEventId = syncResult.eventId;
-                                    await assignmentRepo.save(assignment);
-                                    // console.log(`✅ Created calendar event for member ${assignment.member.id}`);
-                                }
-                            }
-                        } catch (createError) {
-                            console.error(`Failed to create calendar event for member ${assignment.member.id}:`, createError);
-                        }
-                    }
-                });
-
-                await Promise.allSettled(updatePromises);
-            }
 
             await projectRepo.save(existingProject);
             await queryRunner.commitTransaction();
@@ -547,9 +654,17 @@ class ProjectController {
                 project: existingProject
             });
 
-        } catch (error) {
+        } catch (error: any) {
             await queryRunner.rollbackTransaction();
             console.error("Error updating project:", error);
+
+            if (error.status === 409) {
+                return res.status(409).json({
+                    success: false,
+                    message: error.message,
+                    conflicts: error.conflicts
+                });
+            }
 
             return res.status(500).json({
                 success: false,
@@ -560,55 +675,282 @@ class ProjectController {
         }
     };
 
-    private async checkScheduleConflicts(
-        projectId: string,
-        existingAssignments: ProjectAssignment[],
-        newStartDate: string,
-        newEndDate: string,
+    // Helper method to handle event assignments updates
+    private handleEventAssignmentsUpdate = async (
+        event: Events,
+        assignmentsData: any[],
+        companyId: string,
+        memberRepo: Repository<Member>,
+        roleRepo: Repository<Role>,
+        eventAssignmentRepo: Repository<EventAssignment>,
+        queryRunner: QueryRunner,
+        isScheduleUpdate?: boolean
+    ) => {
+        const existingAssignmentsMap = new Map(event.assignments?.map(assignment => [assignment.id, assignment]) || []);
+        const assignmentsToKeep: string[] = [];
+
+        // Check for schedule conflicts if this is a schedule update
+        if (isScheduleUpdate) {
+            const conflicts = await this.checkEventScheduleConflicts(
+                event.id,
+                assignmentsData,
+                event.date,
+                event.startHour,
+                event.endHour,
+                eventAssignmentRepo,
+                companyId
+            );
+
+            if (conflicts.length > 0) {
+                throw {
+                    status: 409,
+                    message: "Your assigned team member ain't available on this new Schedule",
+                    conflicts: conflicts
+                };
+            }
+        }
+
+        for (const assignmentData of assignmentsData) {
+            let assignment: EventAssignment;
+
+            if (assignmentData.id && existingAssignmentsMap.has(assignmentData.id)) {
+                // Update existing assignment
+                assignment = existingAssignmentsMap.get(assignmentData.id)!;
+                assignmentsToKeep.push(assignmentData.id);
+            } else {
+                // Create new assignment
+                assignment = eventAssignmentRepo.create({
+                    events: event
+                });
+            }
+
+            // Validate and update assignment data
+            if (assignmentData.memberId !== undefined) {
+                const member = await memberRepo.findOne({ where: { id: assignmentData.memberId } });
+                if (!member) {
+                    throw { status: 400, message: `Member with ID ${assignmentData.memberId} not found` };
+                }
+                assignment.member = member;
+            }
+
+            if (assignmentData.roleId !== undefined) {
+                const role = await roleRepo.findOne({
+                    where: { id: assignmentData.roleId, company: { id: companyId } }
+                });
+                if (!role) {
+                    throw { status: 400, message: `Role with ID ${assignmentData.roleId} not found` };
+                }
+                assignment.role = role;
+            }
+
+            if (assignmentData.instructions !== undefined) {
+                assignment.instructions = assignmentData.instructions?.trim() || null;
+            }
+
+            await eventAssignmentRepo.save(assignment);
+        }
+
+        // Remove assignments that weren't included in the update
+        const assignmentsToRemove = event.assignments?.filter(assignment => !assignmentsToKeep.includes(assignment.id)) || [];
+        for (const assignmentToRemove of assignmentsToRemove) {
+            await eventAssignmentRepo.remove(assignmentToRemove);
+        }
+    };
+
+    private updateGoogleCalendarForEvent = async (
+        event: Events,
+        project: Project,
+        eventAssignmentRepo: Repository<EventAssignment>
+    ) => {
+        if (!event.assignments || event.assignments.length === 0) {
+            return;
+        }
+
+        const updatePromises = event.assignments.map(async (assignment) => {
+            if (assignment.googleEventId) {
+                try {
+                    await GoogleCalendarService.editCalendarEvent(
+                        assignment.member.id,
+                        event,
+                        assignment.googleEventId
+                    );
+                    console.log(`✅ Updated Google Calendar event for member ${assignment.member.id}`);
+                } catch (error) {
+                    console.error(`❌ Failed to update calendar for member ${assignment.member.id}:`, error);
+                    if (error.message.includes('not found') || error.code === 404) {
+                        try {
+                            const syncResult = await GoogleCalendarService.syncEventToCalendar(
+                                assignment.member.id,
+                                event,
+                                assignment.id
+                            );
+                            if (syncResult.success && syncResult.eventId) {
+                                assignment.googleEventId = syncResult.eventId;
+                                await eventAssignmentRepo.save(assignment);
+                            }
+                        } catch (createError) {
+                            console.error(`❌ Failed to create new calendar event:`, createError);
+                        }
+                    }
+                }
+            }
+        });
+
+        await Promise.allSettled(updatePromises);
+    };
+    // Helper method to update Google Calendar for all events in a project
+    // Helper method to update Google Calendar for all events in a project
+    private updateGoogleCalendarForAllProjectEvents = async (
+        project: Project,
+        eventsRepo: Repository<Events>,
+        eventAssignmentRepo: Repository<EventAssignment>
+    ) => {
+        // Load fresh events with project and company relations
+        const freshEvents = await eventsRepo.find({
+            where: { project: { id: project.id } },
+            relations: [
+                "project",
+                "project.company", // Make sure company is loaded
+                "assignments",
+                "assignments.member"
+            ]
+        });
+
+        if (!freshEvents || freshEvents.length === 0) {
+            return;
+        }
+
+        const updatePromises = freshEvents.flatMap(event =>
+            event.assignments?.map(async (assignment) => {
+                if (assignment.googleEventId && assignment.member?.id) {
+                    try {
+                        const hasAuth = await GoogleCalendarService.hasGoogleAuth(assignment.member.id);
+                        if (hasAuth) {
+                            // Make sure event has the updated project data
+                            event.project = project; // Ensure latest project data
+
+                            await GoogleCalendarService.editCalendarEvent(
+                                assignment.member.id,
+                                event,
+                                assignment.googleEventId
+                            );
+                            console.log(`✅ Updated Google Calendar event for member ${assignment.member.id} with new project name: ${project.name}`);
+                        }
+                    } catch (error) {
+                        console.error(`❌ Failed to update calendar for member ${assignment.member.id}:`, error);
+                        // If event not found, try to sync a new one
+                        if (error.message.includes('not found') || error.code === 404) {
+                            try {
+                                const syncResult = await GoogleCalendarService.syncEventToCalendar(
+                                    assignment.member.id,
+                                    event,
+                                    assignment.id
+                                );
+                                if (syncResult.success && syncResult.eventId) {
+                                    assignment.googleEventId = syncResult.eventId;
+                                    await eventAssignmentRepo.save(assignment);
+                                }
+                            } catch (syncError) {
+                                console.error(`❌ Failed to create new calendar event:`, syncError);
+                            }
+                        }
+                    }
+                }
+            }) || []
+        );
+
+        await Promise.allSettled(updatePromises);
+    };
+    private async checkEventScheduleConflicts(
+        eventId: string,
+        assignmentsData: any[],
+        newDate: string,
         newStartHour: number,
         newEndHour: number,
-        assignmentRepo: any
+        eventAssignmentRepo: Repository<EventAssignment>,
+        companyId: string
     ): Promise<any[]> {
         const conflicts = [];
 
-        for (const assignment of existingAssignments) {
-            const memberId = assignment.member.id;
-            const memberName = assignment.member.name;
+        // If no assignments, no conflicts to check
+        if (!assignmentsData || assignmentsData.length === 0) {
+            return conflicts;
+        }
 
-            // Get all other assignments for this member
-            const otherAssignments = await assignmentRepo
+        // Pre-fetch company members for all assignments in this company
+        const memberIds = assignmentsData.map(assignment => assignment.memberId).filter(Boolean);
+        if (memberIds.length === 0) {
+            return conflicts;
+        }
+
+        const companyMemberRepo = AppDataSource.getRepository(CompanyMember);
+        const companyMembers = await companyMemberRepo.find({
+            where: {
+                member: { id: In(memberIds) },
+                company: { id: companyId }
+            },
+            relations: ["member", "company"]
+        });
+
+        // Create a map for quick lookup
+        const companyMemberMap = new Map();
+        companyMembers.forEach(cm => {
+            companyMemberMap.set(cm.member.id, cm);
+        });
+
+        for (const assignmentData of assignmentsData) {
+            const memberId = assignmentData.memberId;
+            if (!memberId) continue;
+
+            // Get all other event assignments for this member
+            const otherAssignments = await eventAssignmentRepo
                 .createQueryBuilder("assignment")
-                .leftJoinAndSelect("assignment.project", "project")
+                .leftJoinAndSelect("assignment.events", "events")
+                .leftJoinAndSelect("events.project", "project")
+                .leftJoinAndSelect("project.company", "company")
                 .leftJoinAndSelect("assignment.member", "member")
+                .leftJoinAndSelect("member.companyMembers", "companyMembers")
+                .leftJoinAndSelect("companyMembers.company", "companyMemberCompany")
                 .where("assignment.memberId = :memberId", { memberId })
-                .andWhere("project.id != :projectId", { projectId })
+                .andWhere("events.id != :eventId", { eventId })
                 .getMany();
 
-
             for (const otherAssignment of otherAssignments) {
-                const existingProject = otherAssignment.project;
+                const existingEvent = otherAssignment.events;
 
-                const hasConflict = this.hasTimeConflict(
-                    newStartDate, newEndDate, newStartHour, newEndHour,
-                    existingProject.startDate, existingProject.endDate,
-                    existingProject.startHour, existingProject.endHour
-                );
+                if (!existingEvent.date) {
+                    continue;
+                }
+
+                // Since events are single day, we only need to check same day and time overlap
+                const hasConflict = newDate === existingEvent.date &&
+                    newStartHour < existingEvent.endHour &&
+                    newEndHour > existingEvent.startHour;
 
                 if (hasConflict) {
+                    const companyMember = companyMemberMap.get(memberId);
+
+                    let memberName = companyMember?.name;
+                    if (!memberName && otherAssignment.member?.companyMembers) {
+                        const relevantCompanyMember = otherAssignment.member.companyMembers.find(
+                            cm => cm.company?.id === companyId
+                        );
+                        memberName = relevantCompanyMember?.name;
+                    }
+
                     conflicts.push({
-                        memberId: assignment.member.id,
-                        memberName: assignment.member.name,
-                        conflictingProjectId: existingProject.id,
-                        conflictingProjectName: existingProject.name,
-                        conflictingProjectDates: {
-                            startDate: existingProject.startDate,
-                            endDate: existingProject.endDate,
-                            startHour: existingProject.startHour,
-                            endHour: existingProject.endHour
+                        memberId: memberId,
+                        memberName: memberName || `Member ${memberId}`,
+                        conflictingEventId: existingEvent.id,
+                        conflictingProjectId: existingEvent.project?.id,
+                        conflictingProjectName: existingEvent.project?.name,
+                        conflictingEventDate: existingEvent.date,
+                        conflictingEventTimes: {
+                            startHour: existingEvent.startHour,
+                            endHour: existingEvent.endHour
                         },
-                        newDates: {
-                            startDate: newStartDate,
-                            endDate: newEndDate,
+                        newEventTimes: {
+                            date: newDate,
                             startHour: newStartHour,
                             endHour: newEndHour
                         }
@@ -620,55 +962,38 @@ class ProjectController {
         return conflicts;
     }
 
-    private hasTimeConflict(
-        newStartDate: string, newEndDate: string, newStartHour: number, newEndHour: number,
-        existingStartDate: string, existingEndDate: string, existingStartHour: number, existingEndHour: number
-    ): boolean {
-        const newStart = new Date(newStartDate);
-        const newEnd = new Date(newEndDate);
-        const existingStart = new Date(existingStartDate);
-        const existingEnd = new Date(existingEndDate);
+    // private hasTimeConflict(
+    //     newStartDate: string, newEndDate: string, newStartHour: number, newEndHour: number,
+    //     existingStartDate: string, existingEndDate: string, existingStartHour: number, existingEndHour: number
+    // ): boolean {
+    //     // Since events are single day, we only check same day and time overlap
+    //     if (newStartDate !== existingStartDate) {
+    //         return false; // Different days, no conflict
+    //     }
 
-        // No date overlap at all - no conflict
-        if (newStart > existingEnd || newEnd < existingStart) {
-            return false;
-        }
+    //     // Same day, check time overlap
+    //     return newStartHour < existingEndHour && newEndHour > existingStartHour;
+    // }
 
-        // Get all overlapping days
-        const overlappingDays = this.getOverlappingDays(newStart, newEnd, existingStart, existingEnd);
+    // private getOverlappingDays(start1: Date, end1: Date, start2: Date, end2: Date): Date[] {
+    //     const overlappingDays: Date[] = [];
+    //     const overlapStart = new Date(Math.max(start1.getTime(), start2.getTime()));
+    //     const overlapEnd = new Date(Math.min(end1.getTime(), end2.getTime()));
 
-        // Check each overlapping day for time conflicts
-        for (const day of overlappingDays) {
-            // For each overlapping day, check if the daily working hours conflict
-            const hasTimeOverlap = newStartHour < existingEndHour && newEndHour > existingStartHour;
+    //     // If no overlap, return empty array
+    //     if (overlapStart > overlapEnd) {
+    //         return overlappingDays;
+    //     }
 
-            if (hasTimeOverlap) {
-                return true;
-            }
-        }
-        return false;
-    }
+    //     // Add all days in the overlapping range
+    //     const current = new Date(overlapStart);
+    //     while (current <= overlapEnd) {
+    //         overlappingDays.push(new Date(current));
+    //         current.setDate(current.getDate() + 1);
+    //     }
 
-    private getOverlappingDays(start1: Date, end1: Date, start2: Date, end2: Date): Date[] {
-        const overlappingDays: Date[] = [];
-        const overlapStart = new Date(Math.max(start1.getTime(), start2.getTime()));
-        const overlapEnd = new Date(Math.min(end1.getTime(), end2.getTime()));
-
-
-        // If no overlap, return empty array
-        if (overlapStart > overlapEnd) {
-            return overlappingDays;
-        }
-
-        // Add all days in the overlapping range
-        const current = new Date(overlapStart);
-        while (current <= overlapEnd) {
-            overlappingDays.push(new Date(current));
-            current.setDate(current.getDate() + 1);
-        }
-
-        return overlappingDays;
-    }
+    //     return overlappingDays;
+    // }
 
 
 
@@ -692,12 +1017,17 @@ class ProjectController {
             }
 
             const projectRepo = queryRunner.manager.getRepository(Project);
-            const assignmentRepo = queryRunner.manager.getRepository(ProjectAssignment);
+            const eventsRepo = queryRunner.manager.getRepository(Events);
+            const eventAssignmentRepo = queryRunner.manager.getRepository(EventAssignment);
 
-            // Verify project exists with assignments and member relations
+            // Verify project exists with events, assignments and member relations
             const project = await projectRepo.findOne({
                 where: { id: projectId },
-                relations: ["assignments", "assignments.member"] // Important: load member relations
+                relations: [
+                    "events",
+                    "events.assignments",
+                    "events.assignments.member"
+                ]
             });
 
             if (!project) {
@@ -707,46 +1037,55 @@ class ProjectController {
                 });
             }
 
-            // Delete Google Calendar events BEFORE deleting assignments from database
-            if (project.assignments && project.assignments.length > 0) {
-                // console.log(`🗑️ Deleting Google Calendar events for ${project.assignments.length} assignments`);
+            if (project.events && project.events.length > 0) {
+                console.log(`🗑️ Deleting Google Calendar events for ${project.events.length} events`);
 
-                const deletePromises = project.assignments.map(async (assignment) => {
-                    // console.log(`Assignment Google Event ID: ${assignment.googleEventId}`);
-                    // console.log(`Member ID: ${assignment.member?.id}`);
+                const deletePromises = project.events.flatMap(event =>
+                    event.assignments?.map(async (assignment) => {
+                        if (assignment.googleEventId && assignment.member?.id) {
+                            try {
+                                const result = await GoogleCalendarService.deleteCalendarEvent(
+                                    assignment.member.id,
+                                    assignment.googleEventId
+                                );
 
-                    if (assignment.googleEventId && assignment.member?.id) {
-                        try {
-                            const result = await GoogleCalendarService.deleteCalendarEvent(
-                                assignment.member.id,
-                                assignment.googleEventId
-                            );
-
-                            if (result.success) {
-                                // console.log(`✅ Deleted calendar event for member ${assignment.member.id}`);
-                            } else {
-                                console.warn(`⚠️ Failed to delete calendar event for member ${assignment.member.id}: ${result.message}`);
+                                if (result.success) {
+                                    console.log(`✅ Deleted calendar event for member ${assignment.member.id}`);
+                                } else {
+                                    console.warn(`⚠️ Failed to delete calendar event for member ${assignment.member.id}: ${result.message}`);
+                                }
+                            } catch (error) {
+                                console.error(`❌ Error deleting calendar event for member ${assignment.member.id}:`, error);
+                                // Continue with deletion even if calendar delete fails
                             }
-                        } catch (error) {
-                            console.error(`❌ Error deleting calendar event for member ${assignment.member.id}:`, error);
-                            // Continue with deletion even if calendar delete fails
+                        } else {
+                            console.log(`ℹ️ Skipping - no googleEventId or member ID for assignment`);
                         }
-                    } else {
-                        console.log(`ℹ️ Skipping - no googleEventId or member ID for assignment`);
-                    }
-                });
+                    }) || []
+                );
 
                 await Promise.allSettled(deletePromises);
             }
 
-            // Delete all project assignments from database
-            if (project.assignments && project.assignments.length > 0) {
-                // console.log(`🗑️ Deleting ${project.assignments.length} assignments from database`);
-                await assignmentRepo.remove(project.assignments);
+            // Delete all event assignments from database first
+            if (project.events && project.events.length > 0) {
+                console.log(`🗑️ Deleting assignments from ${project.events.length} events`);
+
+                for (const event of project.events) {
+                    if (event.assignments && event.assignments.length > 0) {
+                        await eventAssignmentRepo.remove(event.assignments);
+                    }
+                }
+            }
+
+            // Delete all events from database
+            if (project.events && project.events.length > 0) {
+                console.log(`🗑️ Deleting ${project.events.length} events from database`);
+                await eventsRepo.remove(project.events);
             }
 
             // Delete the project
-            // console.log(`🗑️ Deleting project: ${project.name}`);
+            console.log(`🗑️ Deleting project: ${project.name}`);
             await projectRepo.remove(project);
 
             await queryRunner.commitTransaction();
@@ -834,7 +1173,7 @@ class ProjectController {
     };
 
     public addMemberToProject = async (
-        req: Request<{}, {}, IAddMemberToProjectRequest>,
+        req: Request<{}, {}, any>,
         res: Response<IAddMemberToProjectResponse>
     ) => {
         const queryRunner = AppDataSource.createQueryRunner();
@@ -842,7 +1181,7 @@ class ProjectController {
         await queryRunner.startTransaction();
 
         try {
-            const { projectId, memberId, roleId } = req.body; // Change from 'role' to 'roleId'
+            const { projectId, memberId, roleId, eventId } = req.body;
 
             // Validation
             if (!projectId?.trim()) {
@@ -859,17 +1198,25 @@ class ProjectController {
                 });
             }
 
-            if (!roleId?.trim()) { // Change from 'role' to 'roleId'
+            if (!roleId?.trim()) {
                 return res.status(400).json({
                     success: false,
                     message: "Role ID is required"
                 });
             }
 
+            if (!eventId?.trim()) {
+                return res.status(400).json({
+                    success: false,
+                    message: "Event ID is required"
+                });
+            }
+
             const projectRepo = queryRunner.manager.getRepository(Project);
             const memberRepo = queryRunner.manager.getRepository(Member);
-            const assignmentRepo = queryRunner.manager.getRepository(ProjectAssignment);
-            const roleRepo = queryRunner.manager.getRepository(Role); // Add role repo
+            const eventsRepo = queryRunner.manager.getRepository(Events);
+            const eventAssignmentRepo = queryRunner.manager.getRepository(EventAssignment);
+            const roleRepo = queryRunner.manager.getRepository(Role);
 
             // Verify project exists and get company info
             const project = await projectRepo.findOne({
@@ -884,140 +1231,19 @@ class ProjectController {
                 });
             }
 
-            // Verify member exists and belongs to the same company
-            const member = await memberRepo.findOne({
+            // Verify event exists and belongs to the project
+            const event = await eventsRepo.findOne({
                 where: {
-                    id: memberId,
+                    id: eventId,
+                    project: { id: projectId }
                 },
-                relations: ["company"]
+                relations: ['project', 'project.company']
             });
 
-            if (!member) {
+            if (!event) {
                 return res.status(404).json({
                     success: false,
-                    message: "Member not found or does not belong to the project's company"
-                });
-            }
-
-            // Check if member is already assigned to the project
-            const existingAssignment = await assignmentRepo.findOne({
-                where: {
-                    project: { id: projectId },
-                    member: { id: memberId }
-                }
-            });
-
-            if (existingAssignment) {
-                return res.status(409).json({
-                    success: false,
-                    message: "Member is already assigned to this project"
-                });
-            }
-
-            // Find the role entity by ID (not name)
-            const roleEntity = await roleRepo.findOne({
-                where: { id: roleId, company: { id: project.company.id } } // Verify role belongs to company
-            });
-
-            if (!roleEntity) {
-                return res.status(400).json({
-                    success: false,
-                    message: "Role not found or doesn't belong to your company"
-                });
-            }
-
-            // Create new assignment
-            const newAssignment = assignmentRepo.create({
-                project,
-                member,
-                role: roleEntity
-            });
-
-            let googleEventId: string | null = null;
-            try {
-                const hasAuth = await GoogleCalendarService.hasGoogleAuth(memberId);
-
-                if (hasAuth) {
-                    const syncResult = await GoogleCalendarService.syncProjectToCalendar(memberId, project);
-                    if (syncResult.success && syncResult.eventId) {
-                        googleEventId = syncResult.eventId;
-                        newAssignment.googleEventId = googleEventId;
-                    } else {
-                        console.warn(`⚠️ Google Calendar sync failed for member ${memberId}: ${syncResult.message}`);
-                    }
-                } else {
-                    // console.log(`ℹ️ Member ${memberId} does not have Google Calendar integration`);
-                }
-            } catch (googleError) {
-                console.error(`❌ Failed to sync to Google Calendar for member ${memberId}:`, googleError);
-                // Continue with assignment creation even if Google sync fails
-            }
-
-            await assignmentRepo.save(newAssignment);
-
-            await queryRunner.commitTransaction();
-
-            return res.status(201).json({
-                success: true,
-                message: "Member successfully added to project",
-                assignmentId: newAssignment.id
-            });
-
-        } catch (error) {
-            await queryRunner.rollbackTransaction();
-            console.error("Error adding member to project:", error);
-
-            return res.status(500).json({
-                success: false,
-                message: "An internal server error occurred while adding member to project"
-            });
-        } finally {
-            await queryRunner.release();
-        }
-    };
-
-    public removeMemberFromProject = async (
-        req: Request<{}, {}, IRemoveMemberFromProjectRequest>,
-        res: Response<IRemoveMemberFromProjectResponse>
-    ) => {
-        const queryRunner = AppDataSource.createQueryRunner();
-        await queryRunner.connect();
-        await queryRunner.startTransaction();
-
-        try {
-            const { projectId, memberId } = req.body;
-
-            // console.log(`🔄 Starting member removal: project=${projectId}, member=${memberId}`);
-
-            // Validation
-            if (!projectId?.trim()) {
-                return res.status(400).json({
-                    success: false,
-                    message: "Project ID is required"
-                });
-            }
-
-            if (!memberId?.trim()) {
-                return res.status(400).json({
-                    success: false,
-                    message: "Member ID is required"
-                });
-            }
-
-            const projectRepo = queryRunner.manager.getRepository(Project);
-            const memberRepo = queryRunner.manager.getRepository(Member);
-            const assignmentRepo = queryRunner.manager.getRepository(ProjectAssignment);
-
-            // Verify project exists
-            const project = await projectRepo.findOne({
-                where: { id: projectId },
-                relations: ["company"]
-            });
-
-            if (!project) {
-                return res.status(404).json({
-                    success: false,
-                    message: "Project not found"
+                    message: "Event not found or does not belong to this project"
                 });
             }
 
@@ -1033,42 +1259,223 @@ class ProjectController {
                 });
             }
 
-            // Find the assignment with ALL relations needed
-            const assignment = await assignmentRepo.findOne({
+            // Check if member is already assigned to this event
+            const existingAssignment = await eventAssignmentRepo.findOne({
                 where: {
-                    project: { id: projectId },
+                    events: { id: eventId },
+                    member: { id: memberId }
+                }
+            });
+
+            if (existingAssignment) {
+                return res.status(409).json({
+                    success: false,
+                    message: "Member is already assigned to this event"
+                });
+            }
+
+            // Check for schedule conflicts
+            const scheduleConflicts = await this.checkEventScheduleConflicts(
+                eventId,
+                [{ memberId }], // Pass as array for consistency with your method signature
+                event.date,
+                event.startHour,
+                event.endHour,
+                eventAssignmentRepo,
+                project.company.id
+            );
+
+            if (scheduleConflicts.length > 0) {
+                return res.status(409).json({
+                    success: false,
+                    message: "Schedule conflict detected",
+                    conflicts: scheduleConflicts
+                });
+            }
+
+            // Find the role entity by ID
+            const roleEntity = await roleRepo.findOne({
+                where: { id: roleId, company: { id: project.company.id } }
+            });
+
+            if (!roleEntity) {
+                return res.status(400).json({
+                    success: false,
+                    message: "Role not found or doesn't belong to your company"
+                });
+            }
+
+            // Create new event assignment
+            const newAssignment = eventAssignmentRepo.create({
+                events: event,
+                member,
+                role: roleEntity
+            });
+
+            let googleEventId: string | null = null;
+            try {
+                const hasAuth = await GoogleCalendarService.hasGoogleAuth(memberId);
+
+                if (hasAuth) {
+                    // Load event with proper relations for Google Calendar
+                    const eventForGoogle = await eventsRepo.findOne({
+                        where: { id: eventId },
+                        relations: ['project', 'project.company']
+                    });
+
+                    if (eventForGoogle) {
+                        const syncResult = await GoogleCalendarService.syncEventToCalendar(
+                            memberId,
+                            eventForGoogle, // Use event with loaded relations
+                            newAssignment.id // Pass assignment ID
+                        );
+                        if (syncResult.success && syncResult.eventId) {
+                            googleEventId = syncResult.eventId;
+                            newAssignment.googleEventId = googleEventId;
+                        } else {
+                            console.warn(`⚠️ Google Calendar sync failed for member ${memberId}: ${syncResult.message}`);
+                        }
+                    }
+                } else {
+                    console.log(`ℹ️ Member ${memberId} does not have Google Calendar integration`);
+                }
+            } catch (googleError) {
+                console.error(`❌ Failed to sync to Google Calendar for member ${memberId}:`, googleError);
+                // Continue with assignment creation even if Google sync fails
+            }
+
+            await eventAssignmentRepo.save(newAssignment);
+
+            await queryRunner.commitTransaction();
+
+            return res.status(201).json({
+                success: true,
+                message: "Member successfully added to event",
+                assignmentId: newAssignment.id
+            });
+
+        } catch (error) {
+            await queryRunner.rollbackTransaction();
+            console.error("Error adding member to event:", error);
+
+            return res.status(500).json({
+                success: false,
+                message: "An internal server error occurred while adding member to event"
+            });
+        } finally {
+            await queryRunner.release();
+        }
+    };
+
+    public removeMemberFromProject = async (
+        req: Request<{}, {}, any>,
+        res: Response<IRemoveMemberFromProjectResponse>
+    ) => {
+        const queryRunner = AppDataSource.createQueryRunner();
+        await queryRunner.connect();
+        await queryRunner.startTransaction();
+
+        try {
+            const { projectId, memberId, eventId } = req.body;
+
+            // Validation
+            if (!projectId?.trim()) {
+                return res.status(400).json({
+                    success: false,
+                    message: "Project ID is required"
+                });
+            }
+
+            if (!memberId?.trim()) {
+                return res.status(400).json({
+                    success: false,
+                    message: "Member ID is required"
+                });
+            }
+
+            if (!eventId?.trim()) {
+                return res.status(400).json({
+                    success: false,
+                    message: "Event ID is required"
+                });
+            }
+
+            const projectRepo = queryRunner.manager.getRepository(Project);
+            const memberRepo = queryRunner.manager.getRepository(Member);
+            const eventsRepo = queryRunner.manager.getRepository(Events);
+            const eventAssignmentRepo = queryRunner.manager.getRepository(EventAssignment);
+
+            // Verify project exists
+            const project = await projectRepo.findOne({
+                where: { id: projectId },
+                relations: ['company']
+            });
+
+            if (!project) {
+                return res.status(404).json({
+                    success: false,
+                    message: "Project not found"
+                });
+            }
+
+            // Verify event exists and belongs to project
+            const event = await eventsRepo.findOne({
+                where: {
+                    id: eventId,
+                    project: { id: projectId }
+                }
+            });
+
+            if (!event) {
+                return res.status(404).json({
+                    success: false,
+                    message: "Event not found or does not belong to this project"
+                });
+            }
+
+            // Verify member exists
+            const member = await memberRepo.findOne({
+                where: { id: memberId }
+            });
+
+            if (!member) {
+                return res.status(404).json({
+                    success: false,
+                    message: "Member not found"
+                });
+            }
+
+            // Find the event assignment
+            const assignment = await eventAssignmentRepo.findOne({
+                where: {
+                    events: { id: eventId },
                     member: { id: memberId }
                 },
-                relations: ["project", "member", "member.company"] // Added member.company for debugging
+                relations: ["events",
+                    "events.project",
+                    "events.project.company",
+                    "member"]
             });
 
             if (!assignment) {
                 return res.status(404).json({
                     success: false,
-                    message: "Member is not assigned to this project"
+                    message: "Member is not assigned to this event"
                 });
             }
 
-            // console.log(`📋 Assignment found:`, {
-            //     assignmentId: assignment.id,
-            //     googleEventId: assignment.googleEventId,
-            //     memberId: assignment.member?.id,
-            //     projectId: assignment.project?.id
-            // });
-
-            // Check if this is the last member assigned to the project
-            const assignmentCount = await assignmentRepo.count({
+            // Check if this is the last member assigned to the event
+            const assignmentCount = await eventAssignmentRepo.count({
                 where: {
-                    project: { id: projectId }
+                    events: { id: eventId }
                 }
             });
 
-            // console.log(`👥 Assignment count for project: ${assignmentCount}`);
-
+            // Prevent removal of the last member from an event
             if (assignmentCount <= 1) {
                 return res.status(400).json({
                     success: false,
-                    message: "Cannot remove the last member from the project. A project must have at least one member assigned."
+                    message: "Cannot remove the last member from an event. Events must have at least one assigned member."
                 });
             }
 
@@ -1077,19 +1484,15 @@ class ProjectController {
 
             // Delete Google Calendar event if exists
             if (assignment.googleEventId) {
-                // console.log(`🗑️ Attempting to delete Google Calendar event: ${assignment.googleEventId} for member: ${memberId}`);
-
                 try {
                     const deleteResult = await GoogleCalendarService.deleteCalendarEvent(
                         memberId,
                         assignment.googleEventId
                     );
 
-                    // console.log(`📋 Google Calendar delete result:`, deleteResult);
-
                     if (deleteResult.success) {
                         calendarDeleted = true;
-                        // console.log(`✅ Deleted Google Calendar event for member ${memberId}: ${assignment.googleEventId}`);
+                        console.log(`✅ Deleted Google Calendar event for member ${memberId}: ${assignment.googleEventId}`);
                     } else {
                         calendarError = deleteResult.message;
                         console.warn(`⚠️ Failed to delete Google Calendar event for member ${memberId}: ${deleteResult.message}`);
@@ -1100,35 +1503,31 @@ class ProjectController {
                     // Continue with assignment removal even if calendar deletion fails
                 }
             } else {
-                // console.log(`ℹ️ No Google Calendar event found for member ${memberId}, skipping deletion`);
+                console.log(`ℹ️ No Google Calendar event found for member ${memberId}, skipping deletion`);
             }
 
-            // Remove the assignment
-            // console.log(`🗑️ Removing assignment from database`);
-            await assignmentRepo.remove(assignment);
-            // console.log(`✅ Assignment removed from database`);
+            // Remove the event assignment
+            await eventAssignmentRepo.remove(assignment);
 
             await queryRunner.commitTransaction();
-            // console.log(`✅ Transaction committed`);
 
             const response: IRemoveMemberFromProjectResponse = {
                 success: true,
-                message: "Member successfully removed from project"
+                message: "Member successfully removed from event"
             };
 
             return res.status(200).json(response);
 
         } catch (error) {
             await queryRunner.rollbackTransaction();
-            console.error("❌ Error removing member from project:", error);
+            console.error("❌ Error removing member from event:", error);
 
             return res.status(500).json({
                 success: false,
-                message: "An internal server error occurred while removing member from project"
+                message: "An internal server error occurred while removing member from event"
             });
         } finally {
             await queryRunner.release();
-            // console.log(`🔚 Query runner released`);
         }
     };
 
@@ -1184,7 +1583,7 @@ class ProjectController {
                 if (!section.title?.trim()) {
                     return res.status(400).json({
                         success: false,
-                        message: "Section title is required"
+                        message: "Title is required and cannot be empty"
                     });
                 }
 
@@ -1195,18 +1594,51 @@ class ProjectController {
                     });
                 }
 
-                // Validate content based on type
-                if (section.type === 'text' && typeof section.content !== 'string') {
-                    return res.status(400).json({
-                        success: false,
-                        message: "Text sections must have string content"
-                    });
+                // Validate content based on type - content must exist and not be empty
+                if (section.type === 'text') {
+                    if (typeof section.content !== 'string') {
+                        return res.status(400).json({
+                            success: false,
+                            message: "Text sections must have string content"
+                        });
+                    }
+                    if (!section.content.trim()) {
+                        return res.status(400).json({
+                            success: false,
+                            message: "Content cannot be empty"
+                        });
+                    }
                 }
 
-                if (section.type === 'list' && !Array.isArray(section.content)) {
+                if (section.type === 'list') {
+                    if (!Array.isArray(section.content)) {
+                        return res.status(400).json({
+                            success: false,
+                            message: "List sections must have array content"
+                        });
+                    }
+                    if (section.content.length === 0) {
+                        return res.status(400).json({
+                            success: false,
+                            message: "Content cannot be empty"
+                        });
+                    }
+                    // Optional: Validate that list items are not empty strings
+                    for (const item of section.content) {
+                        if (typeof item !== 'string' || !item.trim()) {
+                            return res.status(400).json({
+                                success: false,
+                                message: "Content cannot be empty"
+                            });
+                        }
+                    }
+                }
+
+                // Ensure content property exists
+                if (!section.hasOwnProperty('content')) {
                     return res.status(400).json({
                         success: false,
-                        message: "List sections must have array content"
+                        message: "Content is required"
                     });
                 }
             }

@@ -1,7 +1,6 @@
 import { Request, Response } from "express";
 import { AppDataSource } from "../../config/data-source";
 import { Project } from "../../entity/Project";
-import { ProjectAssignment } from "../../entity/ProjectAssignment";
 import { IChecklistItem, IProjectSection } from "../../entity/Project";
 import {
     GetProjectChecklistResponse,
@@ -12,9 +11,15 @@ import {
     UpdateProjectEquipmentsResponse,
     GetProjectRemindersResponse,
     UpdateProjectRemindersRequest,
-    UpdateProjectRemindersResponse
+    UpdateProjectRemindersResponse,
+    UpdateEventRemindersRequest,
+    UpdateEventRemindersResponse,
+    GetEventRemindersResponse
 } from "./types";
 import { generateFileKey, uploadToS3 } from "../../utils/s3upload";
+import { CompanyMember } from "../../entity/CompanyMember";
+import { EventAssignment } from "../../entity/EventAssignment";
+import { Events } from "../../entity/Events";
 
 // Types for Project Assignments
 export interface GetProjectAssignmentsResponse {
@@ -362,13 +367,13 @@ class AdditionalTabsController {
         }
     };
 
-    // GET /project/:projectId/assignments
     public getProjectAssignments = async (
         req: Request<{ projectId: string }, {}, {}>,
-        res: Response<GetProjectAssignmentsResponse>
+        res: Response<any>
     ) => {
         try {
             const { projectId } = req.params;
+            const companyId = res.locals.token?.companyId;
 
             // Validation
             if (!projectId?.trim()) {
@@ -378,49 +383,117 @@ class AdditionalTabsController {
                 });
             }
 
-            const assignmentRepo = AppDataSource.getRepository(ProjectAssignment);
+            const eventsRepo = AppDataSource.getRepository(Events);
+            const eventAssignmentRepo = AppDataSource.getRepository(EventAssignment);
+            const companyMemberRepo = AppDataSource.getRepository(CompanyMember);
 
-            // Get assignments with member and role relations
-            const assignments = await assignmentRepo.find({
+            // Get all events for the project with their assignments
+            const events = await eventsRepo.find({
                 where: { project: { id: projectId } },
-                relations: ["member", "role"],
+                relations: [
+                    "assignments",
+                    "assignments.member",
+                    "assignments.role",
+                    "project",
+                    "project.company"
+                ],
                 select: {
                     id: true,
-                    instructions: true,
-                    member: {
+                    name: true,
+                    date: true,
+                    startHour: true,
+                    endHour: true,
+                    location: true,
+                    reminders: true,
+                    project: {
                         id: true,
-                        name: true,
-                        email: true,
-                        profilePhoto: true,
-                        ringColor: true
+                        company: {
+                            id: true
+                        }
                     },
-                    role: {
+                    assignments: {
                         id: true,
-                        name: true
+                        instructions: true,
+                        googleEventId: true,
+                        member: {
+                            id: true,
+                            email: true,
+                        },
+                        role: {
+                            id: true,
+                            name: true
+                        }
                     }
+                },
+                order: {
+                    date: "ASC",
+                    startHour: "ASC"
                 }
             });
 
-            // Transform the response
-            const assignmentsResponse: AssignmentResponse[] = assignments.map(assignment => ({
-                id: assignment.id,
-                instructions: assignment.instructions || undefined,
-                member: {
-                    id: assignment.member.id,
-                    name: assignment.member.name,
-                    email: assignment.member.email,
-                    profilePhoto: assignment.member.profilePhoto || undefined,
-                    ringColor: assignment.member.ringColor || undefined,
-                },
-                role: {
-                    id: assignment.role.id,
-                    name: assignment.role.name
-                }
-            }));
+            // Get company-specific member details for all assignments across all events
+            const eventsResponse = await Promise.all(
+                events.map(async (event) => {
+                    const eventAssignments = await Promise.all(
+                        event.assignments.map(async (assignment) => {
+                            // Find the company member relationship to get company-specific details
+                            const companyMember = await companyMemberRepo.findOne({
+                                where: {
+                                    member: { id: assignment.member.id },
+                                    company: { id: event.project.company.id }
+                                },
+                                relations: ["member", "role"],
+                                select: {
+                                    id: true,
+                                    name: true,
+                                    profilePhoto: true,
+                                    ringColor: true,
+                                    role: {
+                                        id: true,
+                                        name: true
+                                    },
+                                    member: {
+                                        id: true,
+                                        email: true
+                                    }
+                                }
+                            });
+
+                            return {
+                                id: assignment.id,
+                                instructions: assignment.instructions || undefined,
+                                googleEventId: assignment.googleEventId || undefined,
+                                member: {
+                                    id: assignment.member.id,
+                                    name: companyMember?.name,
+                                    email: assignment.member.email,
+                                    profilePhoto: companyMember?.profilePhoto || undefined,
+                                    ringColor: companyMember?.ringColor || undefined,
+                                },
+                                role: {
+                                    id: assignment.role?.id,
+                                    name: assignment.role?.name
+                                }
+                            };
+                        })
+                    );
+
+                    return {
+                        eventId: event.id,
+                        name: event.name,
+                        date: event.date,
+                        startHour: event.startHour,
+                        endHour: event.endHour,
+                        location: event.location,
+                        reminders: event.reminders,
+                        assignments: eventAssignments
+                    };
+                })
+            );
 
             return res.status(200).json({
                 success: true,
-                assignments: assignmentsResponse
+                events: eventsResponse
             });
 
         } catch (error) {
@@ -432,7 +505,6 @@ class AdditionalTabsController {
         }
     };
 
-    // PUT /project/assignment/:assignmentId/instructions
     public updateAssignmentInstructions = async (
         req: Request<{ assignmentId: string }, {}, UpdateAssignmentInstructionsRequest>,
         res: Response<UpdateAssignmentInstructionsResponse>
@@ -461,12 +533,19 @@ class AdditionalTabsController {
                 });
             }
 
-            const assignmentRepo = queryRunner.manager.getRepository(ProjectAssignment);
+            const eventAssignmentRepo = queryRunner.manager.getRepository(EventAssignment);
+            const companyMemberRepo = AppDataSource.getRepository(CompanyMember);
 
             // Verify assignment exists with relations
-            const assignment = await assignmentRepo.findOne({
+            const assignment = await eventAssignmentRepo.findOne({
                 where: { id: assignmentId },
-                relations: ["member", "role"]
+                relations: [
+                    "member",
+                    "role",
+                    "events",
+                    "events.project",
+                    "events.project.company"
+                ]
             });
 
             if (!assignment) {
@@ -480,23 +559,54 @@ class AdditionalTabsController {
             assignment.instructions = instructions.trim() || null;
             assignment.updatedAt = new Date();
 
-            await assignmentRepo.save(assignment);
+            await eventAssignmentRepo.save(assignment);
             await queryRunner.commitTransaction();
 
+            // Get company-specific member details
+            const companyMember = await companyMemberRepo.findOne({
+                where: {
+                    member: { id: assignment.member.id },
+                    company: { id: assignment.events.project.company.id }
+                },
+                relations: ["member", "role"],
+                select: {
+                    id: true,
+                    name: true,
+                    profilePhoto: true,
+                    ringColor: true,
+                    role: {
+                        id: true,
+                        name: true
+                    },
+                    member: {
+                        id: true,
+                        email: true
+                    }
+                }
+            });
+
             // Prepare response
-            const assignmentResponse: AssignmentResponse = {
+            const assignmentResponse = {
                 id: assignment.id,
                 instructions: assignment.instructions || undefined,
+                googleEventId: assignment.googleEventId || undefined,
                 member: {
                     id: assignment.member.id,
-                    name: assignment.member.name,
+                    name: companyMember?.name,
                     email: assignment.member.email,
-                    profilePhoto: assignment.member.profilePhoto || undefined,
-                    ringColor: assignment.member.ringColor || undefined,
+                    profilePhoto: companyMember?.profilePhoto || undefined,
+                    ringColor: companyMember?.ringColor || undefined,
                 },
                 role: {
-                    id: assignment.role.id,
-                    name: assignment.role.name
+                    id: assignment.role?.id,
+                    name: assignment.role?.name
+                },
+                event: {
+                    id: assignment.events.id,
+                    date: assignment.events.date,
+                    startHour: assignment.events.startHour,
+                    endHour: assignment.events.endHour,
+                    location: assignment.events.location
                 }
             };
 
@@ -816,65 +926,65 @@ class AdditionalTabsController {
             await queryRunner.release();
         }
     };
-    public getProjectReminders = async (
-        req: Request<{ projectId: string }, {}, {}>,
-        res: Response<GetProjectRemindersResponse>
+    public getEventReminders = async (
+        req: Request<{ eventId: string }, {}, {}>,
+        res: Response<GetEventRemindersResponse>
     ) => {
         try {
-            const { projectId } = req.params;
+            const { eventId } = req.params;
 
-            if (!projectId?.trim()) {
+            if (!eventId?.trim()) {
                 return res.status(400).json({
                     success: false,
-                    message: "Project ID is required"
+                    message: "Event ID is required"
                 });
             }
 
-            const projectRepo = AppDataSource.getRepository(Project);
+            const eventsRepo = AppDataSource.getRepository(Events);
 
-            const project = await projectRepo.findOne({
-                where: { id: projectId },
+            const event = await eventsRepo.findOne({
+                where: { id: eventId },
                 select: ["id", "reminders"]
             });
 
-            if (!project) {
+            if (!event) {
                 return res.status(404).json({
                     success: false,
-                    message: "Project not found"
+                    message: "Event not found"
                 });
             }
 
             return res.status(200).json({
                 success: true,
-                reminders: project.reminders || { weekBefore: true, dayBefore: true }
+                reminders: event.reminders || { weekBefore: false, dayBefore: false }
             });
 
         } catch (error) {
-            console.error("Error fetching project reminders:", error);
+            console.error("Error fetching event reminders:", error);
             return res.status(500).json({
                 success: false,
-                message: "An internal server error occurred while fetching project reminders"
+                message: "An internal server error occurred while fetching event reminders"
             });
         }
     };
 
-    public updateProjectReminders = async (
-        req: Request<{ projectId: string }, {}, UpdateProjectRemindersRequest>,
-        res: Response<UpdateProjectRemindersResponse>
+    public updateEventReminders = async (
+        req: Request<{ eventId: string }, {}, UpdateEventRemindersRequest>,
+        res: Response<UpdateEventRemindersResponse>
     ) => {
         const queryRunner = AppDataSource.createQueryRunner();
         await queryRunner.connect();
         await queryRunner.startTransaction();
 
         try {
-            const { projectId } = req.params;
+            const { eventId } = req.params;
             const { reminders } = req.body;
 
             // Validation
-            if (!projectId?.trim()) {
+            if (!eventId?.trim()) {
                 return res.status(400).json({
                     success: false,
-                    message: "Project ID is required"
+                    message: "Event ID is required"
                 });
             }
 
@@ -900,38 +1010,38 @@ class AdditionalTabsController {
                 });
             }
 
-            const projectRepo = queryRunner.manager.getRepository(Project);
+            const eventsRepo = queryRunner.manager.getRepository(Events);
 
-            const project = await projectRepo.findOne({
-                where: { id: projectId }
+            const event = await eventsRepo.findOne({
+                where: { id: eventId }
             });
 
-            if (!project) {
+            if (!event) {
                 return res.status(404).json({
                     success: false,
-                    message: "Project not found"
+                    message: "Event not found"
                 });
             }
 
-            project.reminders = reminders;
-            project.updatedAt = new Date();
+            event.reminders = reminders;
+            event.updatedAt = new Date();
 
-            await projectRepo.save(project);
+            await eventsRepo.save(event);
             await queryRunner.commitTransaction();
 
             return res.status(200).json({
                 success: true,
-                message: "Reminders updated successfully",
-                reminders: project.reminders
+                message: "Event reminders updated successfully",
+                reminders: event.reminders
             });
 
         } catch (error) {
             await queryRunner.rollbackTransaction();
-            console.error("Error updating project reminders:", error);
+            console.error("Error updating event reminders:", error);
 
             return res.status(500).json({
                 success: false,
-                message: "An internal server error occurred while updating project reminders"
+                message: "An internal server error occurred while updating event reminders"
             });
         } finally {
             await queryRunner.release();

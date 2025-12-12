@@ -23,6 +23,7 @@ export const sendNewMemberEmail = async (
   name: string,
   inviteLink: string, // Changed from password to inviteLink
   companyName: string,
+  adminName:string,
   roleName?: string // Added optional role name
 ) => {
   const { subject, html } = await emailRenderer.renderNewMemberEmail({
@@ -32,7 +33,8 @@ export const sendNewMemberEmail = async (
     companyName,
     roleName: roleName || 'Member', // Include role name
     loginUrl: process.env.VITE_FRONTEND_URL,
-    websiteUrl: process.env.VITE_FRONTEND_URL
+    websiteUrl: process.env.VITE_FRONTEND_URL,
+    adminName: adminName
   });
 
   await sendEmail(to, subject, html);

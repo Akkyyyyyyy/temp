@@ -27,8 +27,8 @@ projectRouter.put("/:projectId/documents", additionalTabsController.updateProjec
 projectRouter.post("/:projectId/documents/upload", upload.single("file"), additionalTabsController.uploadProjectDocument);
 projectRouter.delete("/:projectId/documents/:filename", additionalTabsController.deleteProjectDocument);
 projectRouter.delete("/:projectId/documents", additionalTabsController.deleteProjectDocuments);
-projectRouter.get('/:projectId/reminders', additionalTabsController.getProjectReminders);
-projectRouter.put('/:projectId/reminders', additionalTabsController.updateProjectReminders);
+projectRouter.get('/event/:eventId/reminders', additionalTabsController.getEventReminders);
+projectRouter.put('/event/:eventId/reminders', additionalTabsController.updateEventReminders);
 
 // MoodBoard routes
 projectRouter.get('/:projectId/moodboard',  moodBoardController.getMoodBoard);

@@ -1,7 +1,8 @@
 import { Repository, DataSource } from "typeorm";
 import { Role } from "../entity/Role";
 import { Member } from "../entity/Member";
-import { ProjectAssignment } from "../entity/ProjectAssignment";
+import { EventAssignment } from "../entity/EventAssignment";
+import { CompanyMember } from "../entity/CompanyMember";
 
 export interface CreateRoleRequest {
   name: string;
@@ -21,18 +22,20 @@ interface RoleWithCounts {
   createdAt: Date;
   updatedAt: Date;
   memberCount: number; // Number of active members with this role in the company
-  assignmentCount: number; // Number of assignments with this role in the company
+  assignmentCount: number; // Number of event assignments with this role in the company
 }
 
 export class RoleService {
   private roleRepository: Repository<Role>;
   private memberRepository: Repository<Member>;
-  private assignmentRepository: Repository<ProjectAssignment>;
+  private eventAssignmentRepository: Repository<EventAssignment>;
+  private companyMemberRepository: Repository<CompanyMember>;
 
   constructor(private dataSource: DataSource) {
     this.roleRepository = dataSource.getRepository(Role);
     this.memberRepository = dataSource.getRepository(Member);
-    this.assignmentRepository = dataSource.getRepository(ProjectAssignment);
+    this.eventAssignmentRepository = dataSource.getRepository(EventAssignment);
+    this.companyMemberRepository = dataSource.getRepository(CompanyMember);
   }
 
   // Find all roles for a specific company
@@ -45,8 +48,9 @@ export class RoleService {
         'companyMembers.companyId = :companyId AND companyMembers.active = :active',
         { companyId, active: true }
       )
-      .leftJoin('role.assignments', 'assignments')
-      .leftJoin('assignments.project', 'project', 'project.companyId = :companyId', { companyId })
+      .leftJoin('role.eventAssignments', 'eventAssignments') // Changed from assignments to eventAssignments
+      .leftJoin('eventAssignments.events', 'events') // Join through events
+      .leftJoin('events.project', 'project', 'project.companyId = :companyId', { companyId }) // Filter by company through project
       .where('role.companyId = :companyId', { companyId })
       .select([
         'role.id',
@@ -55,7 +59,7 @@ export class RoleService {
         'role.createdAt',
         'role.updatedAt',
         'COUNT(DISTINCT companyMembers.id) as memberCount',
-        'COUNT(DISTINCT assignments.id) as assignmentCount'
+        'COUNT(DISTINCT eventAssignments.id) as assignmentCount' // Changed from assignments to eventAssignments
       ])
       .groupBy('role.id')
       .orderBy('role.name', 'ASC')
@@ -145,7 +149,7 @@ export class RoleService {
   // Delete role within a specific company
   // async deleteForCompany(id: string, companyId: string): Promise<void> {
   //   const role = await this.roleRepository.findOne({
-  //     where: { id, company: { id: companyId } }
+  //     where: { id, companyId }
   //   });
 
   //   if (!role) {
@@ -153,8 +157,8 @@ export class RoleService {
   //   }
 
   //   // Get detailed assignment information for better error messages
-  //   const [companyMembers, assignments] = await Promise.all([
-  //     // Get members with this role
+  //   const [companyMembers, eventAssignments] = await Promise.all([
+  //     // Get company members with this role
   //     this.companyMemberRepository.find({
   //       where: {
   //         role: { id },
@@ -163,33 +167,37 @@ export class RoleService {
   //       relations: ['member'],
   //       take: 5 // Limit to first 5 for error message
   //     }),
-  //     // Get assignments with this role
-  //     this.assignmentRepository.find({
+  //     // Get event assignments with this role
+  //     this.eventAssignmentRepository.find({
   //       where: {
-  //         role: { id },
-  //         project: { company: { id: companyId } }
+  //         role: { id }
   //       },
-  //       relations: ['member', 'project'],
+  //       relations: ['member', 'events', 'events.project'],
   //       take: 5 // Limit to first 5 for error message
   //     })
   //   ]);
 
-  //   if (companyMembers.length > 0 || assignments.length > 0) {
-  //     const memberNames = companyMembers.map(cm => cm.member.name).join(', ');
-  //     const projectNames = assignments.map(a => a.project.name).join(', ');
+  //   // Filter event assignments to only include those belonging to the company
+  //   const companyEventAssignments = eventAssignments.filter(assignment =>
+  //     assignment.events?.project?.company?.id === companyId
+  //   );
+
+  //   if (companyMembers.length > 0 || companyEventAssignments.length > 0) {
+  //     const memberNames = companyMembers.map(cm => cm.member.name || cm.member.email).join(', ');
+  //     const projectNames = companyEventAssignments.map(a => a.events?.project?.name).filter(Boolean).join(', ');
 
   //     let errorMessage = `Cannot delete role "${role.name}" because it is currently assigned to:`;
 
   //     if (companyMembers.length > 0) {
-  //       errorMessage += `\n- ${companyMembers.length} member(s): ${memberNames}`;
+  //       errorMessage += `\n- ${companyMembers.length} company member(s): ${memberNames}`;
   //       if (companyMembers.length === 5) {
   //         errorMessage += '...';
   //       }
   //     }
 
-  //     if (assignments.length > 0) {
-  //       errorMessage += `\n- ${assignments.length} project assignment(s): ${projectNames}`;
-  //       if (assignments.length === 5) {
+  //     if (companyEventAssignments.length > 0) {
+  //       errorMessage += `\n- ${companyEventAssignments.length} event assignment(s) in projects: ${projectNames}`;
+  //       if (companyEventAssignments.length === 5) {
   //         errorMessage += '...';
   //       }
   //     }
@@ -209,24 +217,27 @@ export class RoleService {
   }
 
   // Get role usage count within a specific company
-  // async getRoleUsageCountForCompany(id: string, companyId: string): Promise<{ memberCount: number; assignmentCount: number }> {
-  //   const [memberCount, assignmentCount] = await Promise.all([
-  //     this.memberRepository.count({
-  //       where: {
-  //         role: { id },
-  //         company: { id: companyId }
-  //       }
-  //     }),
-  //     this.assignmentRepository.count({
-  //       where: {
-  //         role: { id },
-  //         project: { company: { id: companyId } }
-  //       }
-  //     })
-  //   ]);
+  async getRoleUsageCountForCompany(id: string, companyId: string): Promise<{ memberCount: number; assignmentCount: number }> {
+    const [memberCount, assignmentCount] = await Promise.all([
+      // Count company members with this role
+      this.companyMemberRepository.count({
+        where: {
+          role: { id },
+          company: { id: companyId }
+        }
+      }),
+      // Count event assignments with this role in the company
+      this.eventAssignmentRepository
+        .createQueryBuilder('eventAssignment')
+        .leftJoin('eventAssignment.events', 'events')
+        .leftJoin('events.project', 'project')
+        .where('eventAssignment.roleId = :id', { id })
+        .andWhere('project.companyId = :companyId', { companyId })
+        .getCount()
+    ]);
 
-  //   return { memberCount, assignmentCount };
-  // }
+    return { memberCount, assignmentCount };
+  }
 
   // Get role usage count (for backward compatibility - deprecated)
   async getRoleUsageCount(id: string): Promise<{ memberCount: number; assignmentCount: number }> {
@@ -278,6 +289,20 @@ export class RoleService {
   async findByNameAndCompany(name: string, companyId: string): Promise<Role | null> {
     return await this.roleRepository.findOne({
       where: { name, companyId }
+    });
+  }
+
+  // Get roles with event assignment details for a specific company
+  async getRolesWithEventAssignments(companyId: string): Promise<Role[]> {
+    return await this.roleRepository.find({
+      where: { companyId },
+      relations: [
+        'eventAssignments',
+        'eventAssignments.member',
+        'eventAssignments.events',
+        'eventAssignments.events.project'
+      ],
+      order: { name: 'ASC' }
     });
   }
 }

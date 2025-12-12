@@ -1,6 +1,7 @@
 // src/modules/project/types.ts
 
-import { IChecklistItem, IClient, IProjectSection, IReminders, Project } from "../../entity/Project";
+import { IReminders } from "../../entity/Events";
+import { IChecklistItem, IClient, IProjectSection, Project } from "../../entity/Project";
 
 export interface IProjectAssignmentInput {
     memberId: string;
@@ -20,7 +21,8 @@ export interface ICreateProjectRequest {
     description?: string;
     companyId: string;
     reminders:IReminders;
-    assignments?: IProjectAssignmentInput[];
+    assignments?: any[];
+    events:any[];
 }
 
 export interface ICreateProjectResponse {
@@ -60,6 +62,7 @@ export interface IAddMemberToProjectResponse {
     success: boolean;
     message: string;
     assignmentId?: string;
+    conflicts?: any[];
 }
 
 export interface IUpdateProjectSectionRequest {
@@ -117,45 +120,7 @@ export interface IGetProjectByIdRequest {
 export interface IGetProjectByIdResponse {
     success: boolean;
     message?: string;
-    project?: {
-        id: string;
-        name: string;
-        color: string;
-        startDate: string;
-        endDate: string;
-        startHour: number;
-        endHour: number;
-        location: string;
-        description: string;
-        client?: {
-            name?: string;
-            email?: string;
-            mobile?: string;
-            cc?: string;
-        } | null;
-        brief: any[];
-        logistics: any[];
-        company: {
-            id: string;
-            name: string;
-        };
-        assignments: {
-            id: string;
-            member: {
-                id: string;
-                name: string;
-                email: string;
-                profilePhoto:string;
-            };
-            role: {
-                id?: string;
-                name?: string;
-            };
-            googleEventId?: string;
-        }[];
-        createdAt: Date;
-        updatedAt: Date;
-    };
+    project?: any;
 }
 
 export interface GetProjectChecklistRequest {
@@ -209,4 +174,25 @@ export interface UpdateProjectRemindersResponse {
   success: boolean;
   message: string;
   reminders?: IReminders;
+}
+// Update interface names
+export interface GetEventRemindersRequest {
+    eventId: string;
+}
+
+export interface GetEventRemindersResponse {
+    success: boolean;
+    message?: string;
+    reminders?: IReminders;
+}
+
+export interface UpdateEventRemindersRequest {
+    eventId: string;
+    reminders: IReminders;
+}
+
+export interface UpdateEventRemindersResponse {
+    success: boolean;
+    message: string;
+    reminders?: IReminders;
 }

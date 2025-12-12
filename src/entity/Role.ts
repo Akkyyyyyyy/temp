@@ -9,9 +9,9 @@ import {
   JoinColumn,
 } from "typeorm";
 import { Member } from "./Member";
-import { ProjectAssignment } from "./ProjectAssignment";
 import { Company } from "./Company";
 import { CompanyMember } from "./CompanyMember";
+import { EventAssignment } from "./EventAssignment";
 
 export interface IRole {
   id: string;
@@ -22,7 +22,7 @@ export interface IRole {
   createdAt: Date;
   updatedAt: Date;
   companyMembers: CompanyMember[];
-  assignments: ProjectAssignment[];
+  eventAssignments: EventAssignment[];
 }
 
 @Entity()
@@ -46,8 +46,8 @@ export class Role implements IRole {
   @OneToMany(() => CompanyMember, (companyMember) => companyMember.role)
   companyMembers: CompanyMember[];
 
-  @OneToMany(() => ProjectAssignment, (assignment) => assignment.role)
-  assignments: ProjectAssignment[];
+  @OneToMany(() => EventAssignment, (assignment) => assignment.role)
+  eventAssignments: EventAssignment[];
 
   @CreateDateColumn()
   createdAt: Date;

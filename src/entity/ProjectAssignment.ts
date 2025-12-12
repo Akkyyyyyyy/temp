@@ -1,43 +1,43 @@
-import {
-  Entity,
-  PrimaryGeneratedColumn,
-  Column,
-  ManyToOne,
-  OneToMany,
-  CreateDateColumn,
-  UpdateDateColumn,
-  JoinColumn,
-} from "typeorm";
-import { Member } from "./Member";
-import { Project } from "./Project";
-import { Role } from "./Role";
+// import {
+//   Entity,
+//   PrimaryGeneratedColumn,
+//   Column,
+//   ManyToOne,
+//   OneToMany,
+//   CreateDateColumn,
+//   UpdateDateColumn,
+//   JoinColumn,
+// } from "typeorm";
+// import { Member } from "./Member";
+// import { Project } from "./Project";
+// import { Role } from "./Role";
 
-@Entity()
-export class ProjectAssignment {
-  @PrimaryGeneratedColumn("uuid")
-  id: string;
+// @Entity()
+// export class ProjectAssignment {
+//   @PrimaryGeneratedColumn("uuid")
+//   id: string;
 
-  @ManyToOne(() => Project, (project) => project.assignments, { onDelete: "CASCADE" })
-  @JoinColumn()
-  project: Project;
+//   @ManyToOne(() => Project, (project) => project.assignments, { onDelete: "CASCADE" })
+//   @JoinColumn()
+//   project: Project;
 
-  @ManyToOne(() => Member, (member) => member.assignments, { onDelete: "CASCADE" })
-  @JoinColumn()
-  member: Member;
+//   @ManyToOne(() => Member, (member) => member.assignments, { onDelete: "CASCADE" })
+//   @JoinColumn()
+//   member: Member;
 
-  @ManyToOne(() => Role, (role) => role.assignments, { onDelete: "RESTRICT" })
-  @JoinColumn()
-  role: Role;
+//   @ManyToOne(() => Role, (role) => role.eventAssignments, { onDelete: "RESTRICT" })
+//   @JoinColumn()
+//   role: Role;
 
-  @Column({ type: "text", nullable: true })
-  instructions: string;
+//   @Column({ type: "text", nullable: true })
+//   instructions: string;
 
-  @Column({ nullable: true })
-  googleEventId: string;
+//   @Column({ nullable: true })
+//   googleEventId: string;
 
-  @CreateDateColumn()
-  createdAt: Date;
+//   @CreateDateColumn()
+//   createdAt: Date;
 
-  @UpdateDateColumn()
-  updatedAt: Date;
-}
+//   @UpdateDateColumn()
+//   updatedAt: Date;
+// }

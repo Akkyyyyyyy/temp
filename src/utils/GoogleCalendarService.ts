@@ -3,14 +3,17 @@ import { calendar } from '@googleapis/calendar';
 import { OAuth2Client } from 'google-auth-library';
 import { AppDataSource } from '../config/data-source';
 import { GoogleToken } from '../entity/GoogleToken';
+import { EventAssignment } from '../entity/EventAssignment';
+import { Events } from '../entity/Events';
 import { Member } from '../entity/Member';
-import { ProjectAssignment } from '../entity/ProjectAssignment';
+import { Not, IsNull } from 'typeorm';
 
 const googleTokenRepo = AppDataSource.getRepository(GoogleToken);
+const assignmentRepo = AppDataSource.getRepository(EventAssignment);
 const memberRepo = AppDataSource.getRepository(Member);
+const eventsRepo = AppDataSource.getRepository(Events);
 
 export class GoogleCalendarService {
-
   private readonly oauth2Client = new OAuth2Client(
     process.env.GOOGLE_CLIENT_ID,
     process.env.GOOGLE_CLIENT_SECRET,
@@ -30,7 +33,6 @@ export class GoogleCalendarService {
   // Handle OAuth callback and save tokens
   async handleCallback(code: string, state: string): Promise<{ success: boolean; message: string }> {
     try {
-      // console.log('🔄 Handling OAuth callback...');
       const { tokens } = await this.oauth2Client.getToken(code);
 
       if (!tokens.refresh_token) {
@@ -62,20 +64,24 @@ export class GoogleCalendarService {
       });
 
       await googleTokenRepo.save(googleToken);
-      // console.log('✅ Google tokens saved successfully');
-
       return { success: true, message: 'Google Calendar connected successfully' };
     } catch (error) {
-      // console.error('❌ Error in Google OAuth callback:', error);
+      console.error('❌ Error in Google OAuth callback:', error);
       return { success: false, message: 'Failed to connect Google Calendar' };
     }
   }
 
-  // Get valid access token (refreshes if needed)
-  async getValidAccessToken(memberId: string): Promise<string> {
+  // Get authenticated OAuth2Client with valid credentials
+  private async getAuthenticatedClient(memberId: string): Promise<OAuth2Client> {
     try {
+      console.log("🔑 Getting authenticated client for member:", memberId);
+
+      // Get active token
       const activeToken = await googleTokenRepo.findOne({
-        where: { member: { id: memberId }, isActive: true },
+        where: {
+          member: { id: memberId },
+          isActive: true,
+        },
         relations: ['member']
       });
 
@@ -83,21 +89,82 @@ export class GoogleCalendarService {
         throw new Error('No active Google token found. Please connect Google Calendar first.');
       }
 
-      // console.log('🔑 Token status:', {
-      //   isExpired: activeToken.isExpired(),
-      //   expiryDate: activeToken.expiryDate,
-      //   currentTime: new Date()
-      // });
-
-      // If token is still valid, return it
-      if (!activeToken.isExpired()) {
-        // console.log('✅ Using existing valid access token');
-        return activeToken.accessToken;
+      if (!activeToken.refreshToken) {
+        throw new Error('No refresh token available. Please reconnect Google Calendar.');
       }
 
-      // console.log('🔄 Access token expired, refreshing...');
-      // Token is expired, refresh it
-      return await this.refreshAccessToken(activeToken);
+      // Create OAuth2 client
+      const oauth2Client = new OAuth2Client(
+        process.env.GOOGLE_CLIENT_ID,
+        process.env.GOOGLE_CLIENT_SECRET,
+        process.env.GOOGLE_REDIRECT_URI
+      );
+
+      // Set the refresh token as credentials
+      oauth2Client.setCredentials({
+        refresh_token: activeToken.refreshToken
+      });
+
+      // Get access token (this will refresh if needed)
+      const { credentials } = await oauth2Client.refreshAccessToken();
+
+      if (!credentials.access_token) {
+        throw new Error('Failed to get access token');
+      }
+
+      // Update token in database
+      activeToken.accessToken = credentials.access_token;
+      activeToken.expiryDate = new Date(Date.now() + (credentials.expiry_date || 3600 * 1000));
+      activeToken.tokenType = credentials.token_type || 'Bearer';
+
+      if (credentials.refresh_token) {
+        activeToken.refreshToken = credentials.refresh_token;
+      }
+
+      await googleTokenRepo.save(activeToken);
+
+      // Set the access token for immediate use
+      oauth2Client.setCredentials({
+        access_token: credentials.access_token,
+        refresh_token: activeToken.refreshToken,
+        expiry_date: credentials.expiry_date,
+        token_type: credentials.token_type,
+        scope: credentials.scope
+      });
+
+      return oauth2Client;
+
+    } catch (error: any) {
+      console.error('❌ Error getting authenticated client:', error);
+
+      // Mark token as inactive if refresh failed
+      if (error.message.includes('invalid_grant') || error.code === 400) {
+        await googleTokenRepo.update(
+          { member: { id: memberId }, isActive: true },
+          { isActive: false }
+        );
+        throw new Error('Google authentication expired. Please reconnect Google Calendar.');
+      }
+
+      throw error;
+    }
+  }
+
+  // Get valid access token (for backward compatibility)
+  async getValidAccessToken(memberId: string): Promise<string> {
+    try {
+      console.log("🔑 Getting valid access token for member:", memberId);
+
+      const oauth2Client = await this.getAuthenticatedClient(memberId);
+
+      // Get the access token directly
+      const accessToken = await oauth2Client.getAccessToken();
+
+      if (!accessToken?.token) {
+        throw new Error('Failed to get valid access token');
+      }
+
+      return accessToken.token;
 
     } catch (error) {
       console.error('❌ Error getting valid access token:', error);
@@ -105,148 +172,379 @@ export class GoogleCalendarService {
     }
   }
 
-  // Refresh access token
-  private async refreshAccessToken(googleToken: GoogleToken): Promise<string> {
+  // SYNC EVENT TO GOOGLE CALENDAR (SINGLE DAY EVENT)
+  async syncEventToCalendar(
+    memberId: string,
+    event: Events,
+    assignmentId?: string
+  ): Promise<{ success: boolean; eventId?: string; message: string }> {
     try {
-      // console.log('🔄 Refreshing access token...');
+      console.log(`🔄 Starting sync for event: ${event.name} for member: ${memberId}`);
 
-      this.oauth2Client.setCredentials({
-        refresh_token: googleToken.refreshToken
-      });
+      // Get authenticated client
+      const oauth2Client = await this.getAuthenticatedClient(memberId);
+      const googleCalendar = calendar({ version: 'v3', auth: oauth2Client });
 
-      const { credentials } = await this.oauth2Client.refreshAccessToken();
+      // Convert event to Google Calendar event
+      const calendarEvent = this.eventToCalendarEvent(event);
 
-      // console.log('✅ Successfully refreshed access token');
+      // Find if there's an existing event for this assignment
+      let existingEventId: string | null = null;
 
-      // Update token in database
-      googleToken.accessToken = credentials.access_token!;
-      googleToken.expiryDate = new Date(Date.now() + (credentials.expiry_date || 3600 * 1000));
-      googleToken.tokenType = credentials.token_type!;
+      if (assignmentId) {
+        const assignment = await assignmentRepo.findOne({
+          where: { id: assignmentId },
+          relations: ['events']
+        });
 
-      await googleTokenRepo.save(googleToken);
-
-      return credentials.access_token!;
-    } catch (error: any) {
-      console.error('❌ Error refreshing token:', error);
-
-      // If refresh fails, mark token as inactive
-      googleToken.isActive = false;
-      await googleTokenRepo.save(googleToken);
-
-      if (error.message.includes('invalid_grant')) {
-        throw new Error('Google authentication expired. Please reconnect Google Calendar.');
+        if (assignment?.googleEventId) {
+          existingEventId = assignment.googleEventId;
+        } else {
+          // Try to find by event ID in extended properties
+          existingEventId = await this.findExistingEvent(googleCalendar, event.id);
+        }
       }
 
-      throw new Error('Token refresh failed. Please re-authenticate.');
+      let result;
+      if (existingEventId) {
+        console.log(`🔄 Updating existing event: ${event.name} (Event ID: ${existingEventId})`);
+        result = await googleCalendar.events.update({
+          calendarId: 'primary',
+          eventId: existingEventId,
+          requestBody: calendarEvent
+        });
+        console.log(`✅ Updated event: ${event.name}`);
+      } else {
+        console.log(`🔄 Creating new event for: ${event.name}`);
+        result = await googleCalendar.events.insert({
+          calendarId: 'primary',
+          requestBody: calendarEvent
+        });
+        console.log(`✅ Created event: ${event.name}`);
+      }
+
+      // Update the assignment with googleEventId if assignmentId is provided
+      if (assignmentId && result.data.id) {
+        try {
+          await assignmentRepo.update(assignmentId, {
+            googleEventId: result.data.id
+          });
+          console.log(`✅ Updated assignment ${assignmentId} with googleEventId: ${result.data.id}`);
+        } catch (updateError) {
+          console.error(`❌ Failed to update assignment with googleEventId:`, updateError);
+        }
+      }
+
+      return {
+        success: true,
+        eventId: result.data.id,
+        message: existingEventId ? 'Event updated' : 'Event created'
+      };
+
+    } catch (error: any) {
+      console.error(`❌ Error syncing event "${event.name}":`, error);
+
+      if (error.code === 401 || error.message.includes('authentication expired')) {
+        await googleTokenRepo.update(
+          { member: { id: memberId }, isActive: true },
+          { isActive: false }
+        );
+        return {
+          success: false,
+          message: 'Google authentication expired. Please reconnect Google Calendar.'
+        };
+      }
+
+      return { success: false, message: error.message || 'Failed to sync to calendar' };
     }
   }
 
-  // Sync project to Google Calendar
-async syncProjectToCalendar(
-    memberId: string, 
-    project: any, 
-    assignmentId?: string // Add assignmentId parameter
-): Promise<{ success: boolean; eventId?: string; message: string }> {
+  // CONVERT EVENT TO GOOGLE CALENDAR EVENT (SINGLE DAY)
+  private eventToCalendarEvent(event: Events): any {
+    const timeZone = Intl.DateTimeFormat().resolvedOptions().timeZone;
+
+    // Get project details if available
+    const projectName = event.project?.name || 'Unknown Project';
+    const clientName = event.project?.client?.name || 'N/A';
+    const companyName = event.project?.company?.name || 'Unknown Company';
+
+    // Format date for single day event
+    const eventDate = new Date(event.date);
+    const eventDateStr = eventDate.toISOString().split('T')[0];
+
+    // Determine if it's an all-day event or has specific hours
+    const hasHours = event.startHour !== null && event.endHour !== null;
+
+    const description = `
+<b>${event.name}</b>
+
+<b>Project:</b> ${projectName}
+<b>Client:</b> ${clientName}
+<b>Location:</b> ${event.location || 'Not specified'}
+<b>Company:</b> ${companyName}
+
+<small><i>Event synced from The Weddx Calendar Platform</i></small>
+    `.trim();
+
+    const extendedProperties = {
+      private: {
+        eventId: event.id,
+        projectId: event.project?.id,
+        source: 'Weddex-Sync',
+        syncTime: new Date().toISOString()
+      }
+    };
+
+    if (hasHours) {
+      // Event with specific hours
+      const startDateTime = new Date(eventDate);
+      startDateTime.setHours(event.startHour!, 0, 0, 0);
+
+      const endDateTime = new Date(eventDate);
+      endDateTime.setHours(event.endHour!, 0, 0, 0);
+
+      return {
+        summary: event.name,
+        description,
+        location: event.location || '',
+        // colorId: this.getColorId(event.color),
+        extendedProperties,
+        start: {
+          dateTime: startDateTime.toISOString(),
+          timeZone,
+        },
+        end: {
+          dateTime: endDateTime.toISOString(),
+          timeZone,
+        },
+      };
+    } else {
+      // All-day event
+      const nextDay = new Date(eventDate);
+      nextDay.setDate(nextDay.getDate() + 1);
+
+      return {
+        summary: event.name,
+        description,
+        location: event.location || '',
+        // colorId: this.getColorId(event.color),
+        extendedProperties,
+        start: {
+          date: eventDateStr,
+        },
+        end: {
+          date: nextDay.toISOString().split('T')[0],
+        },
+      };
+    }
+  }
+
+  // Get Google Calendar color ID based on event color
+  private getColorId(color?: string): string {
+    const colorMap: { [key: string]: string } = {
+      'blue': '1',
+      'green': '2',
+      'purple': '3',
+      'red': '4',
+      'yellow': '5',
+      'orange': '6',
+      'turquoise': '7',
+      'gray': '8',
+      'bold-blue': '9',
+      'bold-green': '10',
+      'bold-red': '11'
+    };
+
+    return colorMap[color || 'blue'] || '1'; // Default to blue
+  }
+
+  // Find existing event by event ID in extended properties
+  private async findExistingEvent(calendar: any, eventId: string): Promise<string | null> {
     try {
-        console.log(`🔄 Starting sync for project: ${project.name} for member: ${memberId}`);
+      const response = await calendar.events.list({
+        calendarId: 'primary',
+        privateExtendedProperty: [`eventId=${eventId}`],
+        maxResults: 1,
+        showDeleted: false,
+        singleEvents: true
+      });
 
-        const accessToken = await this.getValidAccessToken(memberId);
-
-        const oauth2Client = new OAuth2Client(
-            process.env.GOOGLE_CLIENT_ID,
-            process.env.GOOGLE_CLIENT_SECRET,
-            process.env.GOOGLE_REDIRECT_URI
+      const existingEvents = response.data.items;
+      if (existingEvents && existingEvents.length > 0) {
+        const validEvent = existingEvents.find(event =>
+          event.extendedProperties?.private?.eventId === eventId
         );
-        oauth2Client.setCredentials({ access_token: accessToken });
 
-        const googleCalendar = calendar({ version: 'v3', auth: oauth2Client });
-
-        const event = this.projectToCalendarEvent(project);
-        const existingEventId = await this.findExistingEvent(googleCalendar, project);
-
-        let result;
-        if (existingEventId) {
-            console.log(`🔄 Updating existing event for: ${project.name} (Event ID: ${existingEventId})`);
-            result = await googleCalendar.events.update({
-                calendarId: 'primary',
-                eventId: existingEventId,
-                requestBody: event
-            });
-            console.log(`✅ Updated event for: ${project.name}`);
-        } else {
-            console.log(`🔄 Creating new event for: ${project.name}`);
-            result = await googleCalendar.events.insert({
-                calendarId: 'primary',
-                requestBody: event
-            });
-            console.log(`✅ Created event for: ${project.name}`);
+        if (validEvent) {
+          return validEvent.id;
         }
+      }
 
-        // Update the assignment with googleEventId if assignmentId is provided
-        if (assignmentId && result.data.id) {
-            try {
-                const assignmentRepo = AppDataSource.getRepository(ProjectAssignment);
-                await assignmentRepo.update(assignmentId, {
-                    googleEventId: result.data.id
-                });
-                console.log(`✅ Updated assignment ${assignmentId} with googleEventId: ${result.data.id}`);
-            } catch (updateError) {
-                console.error(`❌ Failed to update assignment with googleEventId:`, updateError);
-            }
-        }
+      return null;
+    } catch (error) {
+      console.error('❌ Error finding existing event:', error);
+      return null;
+    }
+  }
 
+  // Edit calendar event
+  async editCalendarEvent(
+    memberId: string,
+    event: Events,
+    googleEventId?: string
+  ): Promise<{ success: boolean; eventId?: string; message: string }> {
+    try {
+      console.log(`🔄 Starting event edit for: ${event.name}`);
+
+      // Get authenticated client
+      const oauth2Client = await this.getAuthenticatedClient(memberId);
+      const googleCalendar = calendar({ version: 'v3', auth: oauth2Client });
+
+      const calendarEvent = this.eventToCalendarEvent(event);
+      let eventIdToUpdate = googleEventId;
+
+      if (!eventIdToUpdate) {
+        eventIdToUpdate = await this.findExistingEvent(googleCalendar, event.id);
+      }
+
+      if (!eventIdToUpdate) {
         return {
-            success: true,
-            eventId: result.data.id,
-            message: existingEventId ? 'Event updated' : 'Event created'
+          success: false,
+          message: 'No existing Google Calendar event found to update.'
         };
+      }
+
+      const result = await googleCalendar.events.update({
+        calendarId: 'primary',
+        eventId: eventIdToUpdate,
+        requestBody: calendarEvent
+      });
+
+      console.log(`✅ Successfully updated event: ${event.name}`);
+
+      return {
+        success: true,
+        eventId: result.data.id,
+        message: 'Google Calendar event updated successfully'
+      };
 
     } catch (error: any) {
-        console.error(`❌ Error syncing project "${project.name}":`, error);
+      console.error(`❌ Error editing calendar event "${event.name}":`, error);
 
-        if (error.code === 401 || error.message.includes('authentication expired')) {
-            await googleTokenRepo.update(
-                { member: { id: memberId }, isActive: true },
-                { isActive: false }
-            );
-            return {
-                success: false,
-                message: 'Google authentication expired. Please reconnect Google Calendar.'
-            };
-        }
+      if (error.code === 401 || error.message.includes('authentication expired')) {
+        await googleTokenRepo.update(
+          { member: { id: memberId }, isActive: true },
+          { isActive: false }
+        );
+        return {
+          success: false,
+          message: 'Google authentication expired. Please reconnect Google Calendar.'
+        };
+      }
 
-        return { success: false, message: error.message || 'Failed to sync to calendar' };
+      if (error.code === 404) {
+        console.log(`❌ Event not found, creating new event...`);
+        return await this.syncEventToCalendar(memberId, event);
+      }
+
+      return {
+        success: false,
+        message: error.message || 'Failed to update Google Calendar event'
+      };
     }
-}
+  }
 
+  // Delete calendar event
+  async deleteCalendarEvent(
+    memberId: string,
+    googleEventId?: string
+  ): Promise<{ success: boolean; message: string }> {
+    try {
+      if (!googleEventId) {
+        return {
+          success: false,
+          message: 'No Google Calendar event ID provided'
+        };
+      }
 
+      // Get authenticated client
+      const oauth2Client = await this.getAuthenticatedClient(memberId);
+      const googleCalendar = calendar({ version: 'v3', auth: oauth2Client });
 
+      await googleCalendar.events.delete({
+        calendarId: 'primary',
+        eventId: googleEventId
+      });
 
-  // Check if member has Google Calendar connected
+      console.log(`✅ Successfully deleted Google Calendar event: ${googleEventId}`);
+
+      return {
+        success: true,
+        message: 'Google Calendar event deleted successfully'
+      };
+
+    } catch (error: any) {
+      console.error(`❌ Error deleting calendar event:`, error);
+
+      if (error.code === 401 || error.message.includes('authentication expired')) {
+        await googleTokenRepo.update(
+          { member: { id: memberId }, isActive: true },
+          { isActive: false }
+        );
+        return {
+          success: false,
+          message: 'Google authentication expired. Please reconnect Google Calendar.'
+        };
+      }
+
+      if (error.code === 404) {
+        console.log(`ℹ️ Event not found, considering it already deleted`);
+        return {
+          success: true,
+          message: 'Event was already deleted or not found'
+        };
+      }
+
+      return {
+        success: false,
+        message: error.message || 'Failed to delete Google Calendar event'
+      };
+    }
+  }
+
   async hasGoogleAuth(memberId: string): Promise<boolean> {
     try {
+      console.log("🔍 Checking Google auth for member:", memberId);
+
+      // Find any active token
       const activeToken = await googleTokenRepo.findOne({
-        where: { member: { id: memberId }, isActive: true }
+        where: {
+          member: { id: memberId },
+          isActive: true,
+        }
       });
 
       if (!activeToken) {
+        console.log("❌ No active token found");
         return false;
       }
 
-      // Check if token is still valid or can be refreshed
-      if (!activeToken.isExpired()) {
-        return true;
+      if (!activeToken.refreshToken) {
+        console.log("❌ No refresh token available");
+        return false;
       }
 
-      // Try to refresh to see if the refresh token is still valid
+      // Check if we can get an authenticated client (this will validate the token)
       try {
-        await this.getValidAccessToken(memberId);
+        await this.getAuthenticatedClient(memberId);
         return true;
-      } catch {
+      } catch (error) {
+        console.error("❌ Failed to authenticate:", error);
         return false;
       }
+
     } catch (error) {
-      console.error('Error checking auth status:', error);
+      console.error("❌ Error in hasGoogleAuth:", error);
       return false;
     }
   }
@@ -275,338 +573,6 @@ async syncProjectToCalendar(
     } catch (error) {
       console.error('Error disconnecting Google Calendar:', error);
       return { success: false, message: 'Failed to disconnect Google Calendar' };
-    }
-  }
-
-  // Project to calendar event conversion - ENHANCED VERSION
-  private projectToCalendarEvent(project: any): any {
-    const timeZone = Intl.DateTimeFormat().resolvedOptions().timeZone;
-
-    // Safely handle client object
-    let clientName = 'N/A';
-    if (project.client) {
-      if (typeof project.client === 'string') {
-        clientName = project.client;
-      } else if (project.client.name) {
-        clientName = project.client.name;
-      } else {
-        clientName = 'Client details available';
-      }
-    }
-
-    // Ensure project ID is properly set in extended properties
-    const extendedProperties = {
-      private: {
-        projectId: project.id?.toString(),
-        source: 'VIP-Studio-Sync',
-        syncTime: new Date().toISOString()
-      }
-    };
-
-    // console.log(`📝 Creating event with extended properties:`, extendedProperties.private);
-
-    const baseEvent = {
-      summary: project.name,
-      description: `Project: ${project.name}\nRole: ${project.assignmentRole}\nClient: ${clientName}\nLocation: ${project.location || 'N/A'}\nDescription: ${project.description || 'N/A'}`,
-      location: project.location || '',
-      extendedProperties: extendedProperties,
-    };
-
-    // Handle projects with dates
-    if (project.startDate && project.endDate) {
-      const start = new Date(project.startDate);
-      const end = new Date(project.endDate);
-      const isMultiDay = start.toDateString() !== end.toDateString();
-
-      if (isMultiDay) {
-        // Multi-day event
-        const endDate = new Date(end);
-        endDate.setDate(endDate.getDate() + 1);
-
-        if (project.startHour && project.endHour) {
-          // Multi-day with specific hours
-          const startDateTime = new Date(project.startDate);
-          startDateTime.setHours(project.startHour, 0, 0, 0);
-
-          const endDateTime = new Date(project.startDate);
-          endDateTime.setHours(project.endHour, 0, 0, 0);
-
-          return {
-            ...baseEvent,
-            start: {
-              dateTime: startDateTime.toISOString(),
-              timeZone: timeZone,
-            },
-            end: {
-              dateTime: endDateTime.toISOString(),
-              timeZone: timeZone,
-            },
-            recurrence: [`RRULE:FREQ=DAILY;UNTIL=${this.formatDate(end).replace(/-/g, '')}T235959Z`],
-          };
-        } else {
-          // Multi-day all-day events
-          return {
-            ...baseEvent,
-            start: { date: project.startDate },
-            end: { date: endDate.toISOString().split('T')[0] },
-            recurrence: [`RRULE:FREQ=DAILY;UNTIL=${this.formatDate(end).replace(/-/g, '')}T235959Z`],
-          };
-        }
-      } else {
-        // Single day event
-        if (project.startHour && project.endHour) {
-          const startDateTime = new Date(project.startDate);
-          startDateTime.setHours(project.startHour, 0, 0, 0);
-
-          const endDateTime = new Date(project.startDate);
-          endDateTime.setHours(project.endHour, 0, 0, 0);
-
-          return {
-            ...baseEvent,
-            start: {
-              dateTime: startDateTime.toISOString(),
-              timeZone: timeZone,
-            },
-            end: {
-              dateTime: endDateTime.toISOString(),
-              timeZone: timeZone,
-            },
-          };
-        } else {
-          return {
-            ...baseEvent,
-            start: { date: project.startDate },
-            end: { date: project.startDate },
-          };
-        }
-      }
-    }
-
-    // Fallback for projects without dates
-    const today = new Date().toISOString().split('T')[0];
-    if (project.startHour && project.endHour) {
-      const startDateTime = new Date();
-      startDateTime.setHours(project.startHour, 0, 0, 0);
-
-      const endDateTime = new Date();
-      endDateTime.setHours(project.endHour, 0, 0, 0);
-
-      return {
-        ...baseEvent,
-        start: {
-          dateTime: startDateTime.toISOString(),
-          timeZone: timeZone,
-        },
-        end: {
-          dateTime: endDateTime.toISOString(),
-          timeZone: timeZone,
-        },
-        description: baseEvent.description + '\nNote: This project has no specific dates assigned.',
-      };
-    } else {
-      return {
-        ...baseEvent,
-        start: { date: today },
-        end: { date: today },
-        description: baseEvent.description + '\nNote: This project has no specific dates assigned.',
-      };
-    }
-  }
-  async editCalendarEvent(
-    memberId: string,
-    project: any,
-    googleEventId?: string
-  ): Promise<{ success: boolean; eventId?: string; message: string }> {
-    try {
-      // console.log(`🔄 Starting event edit for project: ${project.name}`);
-
-      const accessToken = await this.getValidAccessToken(memberId);
-
-      const oauth2Client = new OAuth2Client(
-        process.env.GOOGLE_CLIENT_ID,
-        process.env.GOOGLE_CLIENT_SECRET,
-        process.env.GOOGLE_REDIRECT_URI
-      );
-      oauth2Client.setCredentials({ access_token: accessToken });
-
-      const googleCalendar = calendar({ version: 'v3', auth: oauth2Client });
-
-      // Convert project to calendar event
-      const event = this.projectToCalendarEvent(project);
-
-      let eventIdToUpdate = googleEventId;
-
-      // If no event ID provided, try to find existing event
-      if (!eventIdToUpdate) {
-        eventIdToUpdate = await this.findExistingEvent(googleCalendar, project);
-      }
-
-      if (!eventIdToUpdate) {
-        return {
-          success: false,
-          message: 'No existing Google Calendar event found to update. Please create a new event first.'
-        };
-      }
-
-      // console.log(`🔄 Updating event for project: ${project.name} (Event ID: ${eventIdToUpdate})`);
-
-      const result = await googleCalendar.events.update({
-        calendarId: 'primary',
-        eventId: eventIdToUpdate,
-        requestBody: event
-      });
-
-      // console.log(`✅ Successfully updated event for project: ${project.name}`);
-
-      return {
-        success: true,
-        eventId: result.data.id,
-        message: 'Google Calendar event updated successfully'
-      };
-
-    } catch (error: any) {
-      console.error(`❌ Error editing calendar event for project "${project.name}":`, error);
-
-      if (error.code === 401 || error.message.includes('authentication expired')) {
-        await googleTokenRepo.update(
-          { member: { id: memberId }, isActive: true },
-          { isActive: false }
-        );
-        return {
-          success: false,
-          message: 'Google authentication expired. Please reconnect Google Calendar.'
-        };
-      }
-
-      if (error.code === 404) {
-        console.log(`❌ Event not found, it may have been deleted. Creating new event...`);
-        // Fallback to creating a new event
-        return await this.syncProjectToCalendar(memberId, project);
-      }
-
-      return {
-        success: false,
-        message: error.message || 'Failed to update Google Calendar event'
-      };
-    }
-  }
-  async deleteCalendarEvent(
-    memberId: string,
-    googleEventId?: string
-  ): Promise<{ success: boolean; message: string }> {
-    try {
-      // console.log(`🔄 Starting event deletion for member: ${memberId}, event: ${googleEventId}`);
-
-      if (!googleEventId) {
-        return {
-          success: false,
-          message: 'No Google Calendar event ID provided'
-        };
-      }
-
-      const accessToken = await this.getValidAccessToken(memberId);
-
-      const oauth2Client = new OAuth2Client(
-        process.env.GOOGLE_CLIENT_ID,
-        process.env.GOOGLE_CLIENT_SECRET,
-        process.env.GOOGLE_REDIRECT_URI
-      );
-      oauth2Client.setCredentials({ access_token: accessToken });
-
-      const googleCalendar = calendar({ version: 'v3', auth: oauth2Client });
-
-      // console.log(`🗑️ Deleting event: ${googleEventId}`);
-
-      await googleCalendar.events.delete({
-        calendarId: 'primary',
-        eventId: googleEventId
-      });
-
-      // console.log(`✅ Successfully deleted Google Calendar event: ${googleEventId}`);
-
-      return {
-        success: true,
-        message: 'Google Calendar event deleted successfully'
-      };
-
-    } catch (error: any) {
-      console.error(`❌ Error deleting calendar event:`, error);
-
-      if (error.code === 401 || error.message.includes('authentication expired')) {
-        await googleTokenRepo.update(
-          { member: { id: memberId }, isActive: true },
-          { isActive: false }
-        );
-        return {
-          success: false,
-          message: 'Google authentication expired. Please reconnect Google Calendar.'
-        };
-      }
-
-      // If event not found, consider it successfully deleted
-      if (error.code === 404) {
-        console.log(`ℹ️ Event not found, considering it already deleted`);
-        return {
-          success: true,
-          message: 'Event was already deleted or not found'
-        };
-      }
-
-      return {
-        success: false,
-        message: error.message || 'Failed to delete Google Calendar event'
-      };
-    }
-  }
-
-  // Format date as YYYY-MM-DD
-  private formatDate(date: Date): string {
-    return date.toISOString().split('T')[0];
-  }
-
-  // Find existing event - IMPROVED VERSION
-  private async findExistingEvent(calendar: any, project: any): Promise<string | null> {
-    try {
-      if (!project.id) {
-        console.log('❌ No project ID provided, cannot find existing event');
-        return null;
-      }
-
-      // console.log(`🔍 Searching for existing event with projectId: ${project.id}`);
-
-      // Method 1: Search by extended properties (primary method)
-      try {
-        const response = await calendar.events.list({
-          calendarId: 'primary',
-          privateExtendedProperty: [`projectId=${project.id}`],
-          maxResults: 10, // Increased to catch duplicates
-          showDeleted: false,
-          singleEvents: true
-        });
-
-        const existingEvents = response.data.items;
-        // console.log(`🔍 Found ${existingEvents?.length || 0} events via extended properties`);
-
-        if (existingEvents && existingEvents.length > 0) {
-          // Return the first valid event ID
-          const validEvent = existingEvents.find(event =>
-            event.extendedProperties?.private?.projectId === project.id.toString()
-          );
-
-          if (validEvent) {
-            // console.log(`✅ Found existing event via extended properties: ${validEvent.id}`);
-            return validEvent.id;
-          }
-        }
-      } catch (extendedPropError) {
-        console.warn('❌ Extended property search failed:', extendedPropError);
-      }
-
-      return null;
-
-    } catch (error) {
-      console.error('❌ Error finding existing event:', error);
-      return null;
     }
   }
 }

@@ -26,9 +26,11 @@ export interface IUpdatePackageRequest {
 export interface IPackageResponse {
   message: string;
   package?: Package;
+  companyPrice?:number;
 }
 
 export interface IPackageListResponse {
   message: string;
   packages: Package[];
+  companyPrice?:number;
 }

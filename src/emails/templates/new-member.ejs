@@ -56,7 +56,6 @@
 
     .info-item {
       display: flex;
-      justify-content: space-between;
       align-items: center;
       padding: 10px 0;
       border-bottom: 1px solid #2d313d;
@@ -69,10 +68,14 @@
     .label {
       font-weight: 600;
       color: #fcd45b;
+      text-align: left;
+      margin-right: auto;
     }
 
     .value {
       color: #e5e7eb;
+      text-align: right;
+      margin-left: auto;
     }
 
     .invite-link {
@@ -100,6 +103,7 @@
     .cta-button {
       text-align: center;
       margin: 30px 0;
+      color:#fff;
     }
 
     .button {
@@ -115,7 +119,7 @@
     }
 
     .button:hover {
-      background-color: #eab308;
+      background-color: rgb(233, 199, 97);
       transform: translateY(-2px);
       box-shadow: 0 4px 12px rgba(252, 212, 91, 0.3);
     }
@@ -174,38 +178,35 @@
 <body>
   <div class="email-container">
     <div class="header">
-      <h1>Welcome to <%= companyName %>!</h1>
+      <h1>Welcome to the Weddx Calendar!</h1>
     </div>
 
     <div class="content">
       <p>Hey <strong><%= name %></strong>,</p>
-      <p>You've been invited to join <strong><%= companyName %></strong> as a <strong><%= roleName %></strong>. Click the button below to set your password and get started:</p>
+      <p>You've been invited to join <strong><%= companyName %></strong> Calendar</strong>. Click the button below to get started.</p>
 
       <div class="invite-card">
         <div class="info-item">
-          <span class="label">Your Role:</span>
+          <span class="label">Your Role : </span>
           <span class="value"><%= roleName %></span>
         </div>
         <div class="info-item">
-          <span class="label">Email:</span>
-          <span class="value"><%= email %></span>
+          <span class="label">Company :</span>
+          <span class="value"><%= companyName %></span>
+        </div>
+        <div class="info-item">
+          <span class="label">Invite from :</span>
+          <span class="value"><%= adminName %></span>
         </div>
       </div>
 
-      <div class="warning">
-        ⚠️ This invitation link will expire in 24 hours. Please set your password immediately.
-      </div>
-
       <div class="cta-button">
-        <a href="<%= inviteLink %>" class="button" target="_blank">Set Your Password & Get Started</a>
+        <a href="<%= inviteLink %>" class="button" target="_blank">Get Started</a>
       </div>
-
-      <p>If you didn't expect this invitation or face any issues, please contact your administrator.</p>
     </div>
 
     <div class="footer">
-      <p>Best regards,<br><strong>The <%= companyName %> Team</strong></p>
-      <p><a href="<%= websiteUrl %>"><%= websiteUrl %></a></p>
+      <p><br><strong>Weddx.ai Team</strong></p>
     </div>
   </div>
 </body>

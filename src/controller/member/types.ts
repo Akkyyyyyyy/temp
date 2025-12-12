@@ -50,7 +50,9 @@ export interface IMemberResponse {
   companyMemberId: string;
   isInvited: boolean, 
   isOwner:boolean,
-  projects?: IProjectResponse[];
+  invitation:string,
+  projects?: IProjectResponse[],
+  isAdmin:boolean
 }
 
 export interface IGetMembersByCompanyResponse {
@@ -91,26 +93,26 @@ export interface IUpdateMemberResponse {
 // Add to your types file
 export interface IGetAvailableMembersRequest {
   companyId: string;
-  startDate: string;
-  endDate: string;
-  startHour: number;
-  endHour: number;
-  excludeProjectId?: string;
+  eventDate?: string; // Changed from startDate
+  startHour?: number;
+  endHour?: number;
+  excludeEventId?: string; // Changed from excludeProjectId
 }
 
 export interface IConflict {
   projectId: string;
   projectName: string;
-  startDate: string;
-  endDate: string;
+  eventDate: string; // Changed from startDate/endDate
   startHour: number;
   endHour: number;
-  conflictType: "date_and_time" | "date_only";
+  conflictType: "date_only" | "date_and_time";
+  eventId: string;
+  eventName?: string;
 }
 
 export interface IAvailableMemberResponse {
   id: string;
-  profilePhoto: string,
+  profilePhoto: string;
   name: string;
   email: string;
   role: string;
@@ -118,10 +120,10 @@ export interface IAvailableMemberResponse {
   isAdmin: boolean;
   companyMemberId: string;
   phone: string;
-  countryCode: string;
   location: string;
   bio: string;
   skills: string[];
+  ringColor: string; // Added ringColor field
   availabilityStatus: "fully_available" | "partially_available" | "unavailable";
   conflicts: IConflict[];
 }
@@ -133,7 +135,13 @@ export interface IUpdateRingColorRequest {
 export interface IUpdateRingColorResponse {
   success: boolean;
   message: string;
-  member?: Member;
+  companyMember?: {
+    id: string;
+    ringColor: string | null;
+    memberId: string;
+    companyId: string;
+    updatedAt: Date;
+  };
 }
 
 export interface IToggleMemberStatusResponse {

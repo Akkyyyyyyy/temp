@@ -8,6 +8,7 @@ const memberRouter = express.Router();
 memberRouter.post("/add", authMiddleware, MemberController.createMember);
 memberRouter.post("/send-invite", authMiddleware, MemberController.sendMemberInvite);
 memberRouter.post("/check-invite", MemberController.checkMemberInvite);
+memberRouter.post("/update-invitation-status", MemberController.updateInvitationStatus);
 memberRouter.post("/set-password", MemberController.setMemberPassword);
 memberRouter.post("/by-company", authMiddleware, MemberController.getMembersByCompany);
 memberRouter.post("/getAllFutureProjects", authMiddleware, MemberController.getMembersWithCurrentFutureProjects);

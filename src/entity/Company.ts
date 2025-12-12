@@ -30,6 +30,9 @@ export class Company implements ICompany {
   @PrimaryGeneratedColumn("uuid")
   id: string;
 
+  @Column({ nullable: true })
+  logo: string;
+
   @Column()
   name: string;
 
@@ -39,9 +42,12 @@ export class Company implements ICompany {
   @Column()
   country: string;
 
+  @Column("decimal", { scale: 2, nullable: true })
+  price: number | null;
+
   @OneToMany(() => CompanyMember, (companyMember) => companyMember.company)
   companyMembers: CompanyMember[];
-  
+
   @OneToMany(() => Project, (project) => project.company)
   projects: Project[];
 

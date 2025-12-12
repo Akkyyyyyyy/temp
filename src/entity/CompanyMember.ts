@@ -16,14 +16,22 @@ export interface ICompanyMember {
   id: string;
   company: Company;
   member: Member;
+  name: string;
+  phone?: string | null;
+  profilePhoto?: string | null;
+  location?: string | null;
+  bio?: string | null;
+  skills?: string[];
+  ringColor?: string | null;
   role?: Role | null;
   isAdmin: boolean;
+  active: boolean;
   createdAt: Date;
   updatedAt: Date;
 }
 
 @Entity()
-@Unique(["company", "member"]) // Ensure a member can only have one role per company
+@Unique(["company", "member"])
 export class CompanyMember implements ICompanyMember {
   @PrimaryGeneratedColumn("uuid")
   id: string;
@@ -36,6 +44,28 @@ export class CompanyMember implements ICompanyMember {
   @JoinColumn()
   member: Member;
 
+  @Column()
+  name: string;
+
+  @Column({ nullable: true })
+  phone: string;
+
+  @Column({ nullable: true })
+  profilePhoto: string;
+
+  @Column({ nullable: true })
+  location: string;
+
+  @Column({ type: "text", nullable: true })
+  bio: string;
+
+  @Column("simple-array", { default: "" })
+  skills: string[];
+
+  @Column({ nullable: true })
+  ringColor: string;
+
+  // Company-specific permissions
   @ManyToOne(() => Role, (role) => role.companyMembers, { onDelete: "RESTRICT", nullable: true })
   @JoinColumn()
   role?: Role | null;
@@ -43,8 +73,15 @@ export class CompanyMember implements ICompanyMember {
   @Column({ default: false })
   isAdmin: boolean;
   
-  @Column({ default: true }) // Add this - company-specific active status
+  @Column({ default: true })
   active: boolean;
+
+  @Column({
+    type: "enum",
+    enum: ["not_sent", "sent" ,"accepted", "rejected"],
+    default: "not_sent",
+  })
+  invitation: string;
 
   @CreateDateColumn()
   createdAt: Date;

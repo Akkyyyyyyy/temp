@@ -35,9 +35,9 @@ class ForgotPasswordController {
             });
 
             if (!user) {
-                return res.status(200).json({
-                    success: true,
-                    message: "If the email exists, a reset link has been sent"
+                return res.status(400).json({
+                    success: false,
+                    message: "Email is not registered!"
                 });
             }
 
@@ -102,18 +102,15 @@ class ForgotPasswordController {
                 return res.status(400).json({ message: "Email, OTP, token, and user type are required" });
             }
 
-
             try {
                 const decoded = jwt.verify(token, this.JWT_SECRET) as IPasswordResetToken;
 
                 if (decoded.type !== 'password_reset' || decoded.email !== email) {
                     return res.status(400).json({ message: "Invalid token" });
                 }
-
                 if (decoded.otp !== otp) {
                     return res.status(400).json({ message: "Invalid OTP" });
                 }
-
                 const verifiedToken = jwt.sign(
                     {
                         email,

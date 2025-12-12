@@ -12,6 +12,8 @@ import { generatePassword } from "../../helper/helper";
 import { sendEmail, sendNewMemberEmail } from "../../utils/mailer";
 import { CompanyMember } from "../../entity/CompanyMember";
 import { Project } from "../../entity/Project";
+import { Events } from "../../entity/Events";
+import { EventAssignment } from "../../entity/EventAssignment";
 
 
 
@@ -98,14 +100,8 @@ class MemberController {
       } else {
 
         member = memberRepo.create({
-          name,
           email,
           passwordHash: null,
-          countryCode: countryCode || null,
-          phone: phone || null,
-          location: location || null,
-          bio: bio || null,
-          skills: skills || []
         });
 
         await memberRepo.save(member);
@@ -121,6 +117,11 @@ class MemberController {
         //   );
         // }
       } const companyMember = companyMemberRepo.create({
+        name,
+        phone: phone || null,
+        location: location || null,
+        bio: bio || null,
+        skills: skills || [],
         company,
         member,
         role: roleEntity,
@@ -150,11 +151,11 @@ class MemberController {
     }
   };
   public sendMemberInvite = async (
-    req: Request<{}, {}, { memberId: string; companyId: string }>,
+    req: Request<{}, {}, { memberId: string; companyId: string, adminName: string }>,
     res: Response
   ) => {
     try {
-      const { memberId, companyId } = req.body;
+      const { memberId, companyId, adminName } = req.body;
 
       const memberRepo = AppDataSource.getRepository(Member);
       const companyRepo = AppDataSource.getRepository(Company);
@@ -210,6 +211,7 @@ class MemberController {
       const tokenPayload = {
         memberId: member.id,
         companyId: company.id,
+        companyName: companyMember.name,
         email: member.email,
         type: 'set_password_invite',
         exp: Math.floor(Date.now() / 1000) + (24 * 60 * 60)
@@ -232,13 +234,15 @@ class MemberController {
       if (process.env.SMTP_EMAIL) {
         await sendNewMemberEmail(
           member.email,
-          member.name,
+          companyMember.name,
           inviteLink, // Send the invite link instead of password
           company.name,
-          companyMember.role?.name || 'Member'
+          adminName,
+          companyMember.role?.name || 'Member',
         );
       }
-
+      companyMember.invitation = 'sent';
+      await companyMemberRepo.save(companyMember);
       // You might want to store the token in the database for validation
       // member.inviteToken = token;
       // await memberRepo.save(member);
@@ -278,30 +282,188 @@ class MemberController {
         });
       }
       const memberRepo = AppDataSource.getRepository(Member);
+      const companyMemberRepo = AppDataSource.getRepository(CompanyMember);
       const member = await memberRepo.findOne({
         where: { email: decoded.email }
       });
-      if (!member) {
+      const companyMember = await companyMemberRepo.findOne({
+        where: {
+          member: { id: decoded.memberId },
+          company: { id: decoded.companyId }
+        },
+        relations: ['role']
+      });
+      if (!member && companyMember) {
         return res.status(404).json({
           success: false,
           message: "Invalid or expired token"
         });
       }
-      if (member.passwordHash != null) {
+      if (member.passwordHash != null && (companyMember.invitation == "accepted" || companyMember.invitation == "rejected")) {
         return res.status(404).json({
           success: false,
-          message: "Invalid or expired token"
+          message: "Invalid or expired token",
+        });
+      } else if (member.passwordHash != null && (companyMember.invitation == "not_sent" || companyMember.invitation == "sent")) {
+        return res.status(200).json({
+          success: true,
+          message: "Token is Valid, show popup",
+          isPassword: true
         });
       }
       return res.status(200).json({
         success: true,
-        message: "Token is Valid"
+        message: "Token is Valid",
+        isPassword: false
       });
     } catch (error) {
       console.error(error);
       return res.status(500).json({ success: false, message: "Server error" });
     }
   }
+  public updateInvitationStatus = async (req: Request<{}, {}, { token: string, status: boolean }>,
+    res: Response
+  ) => {
+
+    try {
+      const { token, status } = req.body;
+
+      const jwtSecret = process.env.JWT_SECRET;
+      if (!jwtSecret) {
+        return res.status(500).json({
+          success: false,
+          message: "JWT secret not configured"
+        });
+      }
+
+      // Verify JWT token
+      let decoded;
+      try {
+        decoded = jwt.verify(token, jwtSecret) as any;
+      } catch (err) {
+        return res.status(400).json({
+          success: false,
+          message: "Invalid or expired token"
+        });
+      }
+
+      // Check if token is for set password invite
+      if (decoded.type !== 'set_password_invite') {
+        return res.status(400).json({
+          success: false,
+          message: "Invalid token type"
+        });
+      }
+
+      const memberRepo = AppDataSource.getRepository(Member);
+      const member = await memberRepo.findOne({
+        where: { id: decoded.memberId },
+        relations: ['companyMembers', 'companyMembers.company', 'companyMembers.role'],
+      });
+
+      if (!member) {
+        return res.status(404).json({
+          success: false,
+          message: "Member not found"
+        });
+      }
+      const companyMemberRepo = AppDataSource.getRepository(CompanyMember);
+
+      const companyMember = await companyMemberRepo.findOne({
+        where: {
+          member: { id: decoded.memberId },
+          company: { id: decoded.companyId },
+        }
+      })
+      if (!companyMember) {
+        return res.status(404).json({
+          success: false,
+          message: "Invitation not found"
+        });
+      }
+      if (status) {
+        companyMember.invitation = "accepted";
+      } else {
+        companyMember.invitation = "rejected";
+      }
+      await companyMemberRepo.save(companyMember);
+
+      const updatedMember = await memberRepo.findOne({
+        where: { id: decoded.memberId },
+        relations: ['companyMembers', 'companyMembers.company', 'companyMembers.role'],
+      });
+
+      if (!updatedMember) {
+        return res.status(404).json({
+          success: false,
+          message: "Member not found after update"
+        });
+      }
+
+
+      const acceptedCompanyMembers = updatedMember.companyMembers.filter(cm => cm.invitation === 'accepted');
+
+
+      const primaryCompanyMember = acceptedCompanyMembers[0];
+      const primaryCompany = primaryCompanyMember.company;
+      const companyId = primaryCompany?.id ?? null;
+
+      const associatedCompanies = updatedMember.companyMembers.map((cm) => ({
+        id: cm.company.id,
+        name: cm.company.name,
+        email: cm.company.email,
+        country: cm.company.country,
+        isAdmin: cm.isAdmin,
+        role: cm.role ? cm.role.name : null,
+        roleId: cm.role ? cm.role.id : null
+      }));
+      // Create JWT with user type based on isAdmin
+
+      const newToken = jwt.sign(
+        {
+          memberId: updatedMember.id,
+          companyId: companyId,
+          isAdmin: primaryCompanyMember.isAdmin,
+          companyMemberId: primaryCompanyMember.id
+        },
+        process.env.JWT_SECRET!,
+        { expiresIn: "1d" }
+      );
+
+      // Build unified user response
+      const userData = {
+        id: updatedMember.id,
+        name: primaryCompanyMember.name,
+        email: updatedMember.email,
+        role: primaryCompanyMember.role ? primaryCompanyMember.role.name : null,
+        roleId: primaryCompanyMember.role ? primaryCompanyMember.role.id : null,
+        isAdmin: primaryCompanyMember.isAdmin,
+        location: primaryCompanyMember.location ?? null,
+        profilePhoto: primaryCompanyMember.profilePhoto ?? null,
+        phone: primaryCompanyMember.phone ?? null,
+        company: {
+          id: companyId,
+          name: primaryCompany?.name ?? null,
+          email: primaryCompany?.email ?? null,
+          country: primaryCompany?.country ?? null,
+        },
+        associatedCompanies,
+        companyMemberId: primaryCompanyMember.id
+      };
+
+      return res.status(200).json({
+        success: true,
+        message: "Password set successfully",
+        token: newToken,
+        user: userData
+      });
+
+    } catch (err) {
+      console.error(err);
+      return res.status(500).json({ success: false, message: "Server error" });
+    }
+  }
+
   public setMemberPassword = async (
     req: Request<{}, {}, { token: string; password: string }>,
     res: Response
@@ -358,11 +520,41 @@ class MemberController {
       // member.inviteToken = null; // If you stored the token
       await memberRepo.save(member);
 
-      const primaryCompanyMember = member.companyMembers[0];
+      const companyMemberRepo = AppDataSource.getRepository(CompanyMember);
+
+      const companyMember = await companyMemberRepo.findOne({
+        where: {
+          member: { id: decoded.memberId },
+          company: { id: decoded.companyId },
+        }
+      })
+      if (!companyMember) {
+        return res.status(404).json({
+          success: false,
+          message: "Invitation not found"
+        });
+      }
+      companyMember.invitation = "accepted";
+      await companyMemberRepo.save(companyMember);
+      const updatedMember = await memberRepo.findOne({
+        where: { id: decoded.memberId },
+        relations: ['companyMembers', 'companyMembers.company', 'companyMembers.role'],
+      });
+
+      if (!updatedMember) {
+        return res.status(404).json({
+          success: false,
+          message: "Member not found after update"
+        });
+      }
+
+
+      const acceptedCompanyMembers = updatedMember.companyMembers.filter(cm => cm.invitation === 'accepted');
+      const primaryCompanyMember = acceptedCompanyMembers[0];
       const primaryCompany = primaryCompanyMember.company;
       const companyId = primaryCompany?.id ?? null;
 
-      const associatedCompanies = member.companyMembers.map((cm) => ({
+      const associatedCompanies = updatedMember.companyMembers.map((cm) => ({
         id: cm.company.id,
         name: cm.company.name,
         email: cm.company.email,
@@ -375,7 +567,7 @@ class MemberController {
 
       const newToken = jwt.sign(
         {
-          memberId: member.id,
+          memberId: updatedMember.id,
           companyId: companyId,
           isAdmin: primaryCompanyMember.isAdmin,
           companyMemberId: primaryCompanyMember.id
@@ -386,18 +578,18 @@ class MemberController {
 
       // Build unified user response
       const userData = {
-        id: member.id,
-        name: member.name,
-        email: member.email,
+        id: updatedMember.id,
+        name: primaryCompanyMember.name,
+        email: updatedMember.email,
         role: primaryCompanyMember.role ? primaryCompanyMember.role.name : null,
         roleId: primaryCompanyMember.role ? primaryCompanyMember.role.id : null,
         isAdmin: primaryCompanyMember.isAdmin,
-        location: member.location ?? null,
-        profilePhoto: member.profilePhoto ?? null,
-        phone: member.phone ?? null,
-        countryCode: member.countryCode ?? null,
+        location: primaryCompanyMember.location ?? null,
+        profilePhoto: primaryCompanyMember.profilePhoto ?? null,
+        phone: primaryCompanyMember.phone ?? null,
         company: {
           id: companyId,
+          logo: primaryCompany?.logo ?? null,
           name: primaryCompany?.name ?? null,
           email: primaryCompany?.email ?? null,
           country: primaryCompany?.country ?? null,
@@ -459,7 +651,7 @@ class MemberController {
 
       const companyRepo = AppDataSource.getRepository(Company);
       const companyMemberRepo = AppDataSource.getRepository(CompanyMember);
-      const projectRepo = AppDataSource.getRepository(Project)
+      const eventAssignmentRepo = AppDataSource.getRepository(EventAssignment);
 
       const company = await companyRepo.findOneBy({ id: companyId });
       if (!company) {
@@ -474,36 +666,30 @@ class MemberController {
       let endDate: string;
 
       if (viewType === 'month') {
-        // Month view logic
         startDate = `${year}-${month.toString().padStart(2, '0')}-01`;
         const lastDay = new Date(year, month, 0).getDate();
         endDate = `${year}-${month.toString().padStart(2, '0')}-${lastDay.toString().padStart(2, '0')}`;
       } else {
-        // Week view logic
         const weekStart = this.getDateFromWeek(year, week);
         const weekEnd = new Date(weekStart);
-        weekEnd.setDate(weekStart.getDate() + 6); // Add 6 days to get end of week
-
+        weekEnd.setDate(weekStart.getDate() + 6);
         startDate = this.formatDate(weekStart);
         endDate = this.formatDate(weekEnd);
       }
 
-      // Build query for company members with relations
-      const queryBuilder = companyMemberRepo.createQueryBuilder('companyMember')
+      // First, get all company members (regardless of assignments)
+      const companyMembersQuery = companyMemberRepo.createQueryBuilder('companyMember')
         .leftJoinAndSelect('companyMember.member', 'member')
         .leftJoinAndSelect('companyMember.role', 'role')
-        .leftJoinAndSelect('member.assignments', 'assignments')
-        .leftJoinAndSelect('assignments.role', 'assignmentRole')
-        .leftJoinAndSelect('assignments.project', 'project')
         .where('companyMember.companyId = :companyId', { companyId });
 
       // If memberId is provided, filter for that specific member
       // if (memberId) {
-      //   queryBuilder.andWhere('member.id = :memberId', { memberId });
+      //     companyMembersQuery.andWhere('member.id = :memberId', { memberId });
       // }
 
-      const companyMembers = await queryBuilder
-        .orderBy('companyMember.createdAt', 'DESC')
+      const companyMembers = await companyMembersQuery
+        .orderBy('companyMember.name', 'ASC')
         .getMany();
 
       // If memberId was provided but no member found, return error
@@ -513,109 +699,121 @@ class MemberController {
           message: "Member not found in this company"
         });
       }
-      const companyProjects = await projectRepo.find({
-        where: { company: { id: companyId } },
-        select: ['id']
+
+      // Get event assignments for the date range to populate events for members
+      const eventAssignmentsQuery = eventAssignmentRepo.createQueryBuilder('eventAssignment')
+        .leftJoinAndSelect('eventAssignment.member', 'member')
+        .leftJoinAndSelect('eventAssignment.events', 'events')
+        .leftJoinAndSelect('eventAssignment.role', 'role')
+        .leftJoinAndSelect('events.project', 'project')
+        .leftJoinAndSelect('project.company', 'projectCompany') // Add project company relation
+        .where('events.date BETWEEN :startDate AND :endDate', { startDate, endDate })
+        .andWhere('member.id IN (:...memberIds)', {
+          memberIds: companyMembers.map(cm => cm.member.id)
+        });
+
+      const eventAssignments = await eventAssignmentsQuery
+        .orderBy('events.date', 'ASC')
+        .addOrderBy('events.startHour', 'ASC')
+        .getMany();
+
+      // Group event assignments by member ID for easy lookup
+      const assignmentsByMember = new Map();
+      eventAssignments.forEach(assignment => {
+        const memberId = assignment.member.id;
+        if (!assignmentsByMember.has(memberId)) {
+          assignmentsByMember.set(memberId, []);
+        }
+        assignmentsByMember.get(memberId).push(assignment);
       });
-      const companyProjectIds = new Set(companyProjects.map(p => p.id));
 
-      // Format the response with proper type conversion and date filtering
-      let membersResponse: IMemberResponse[] = companyMembers.map(companyMember => {
+      // Build the response with all company members, including those with no assignments
+      const membersResponse = companyMembers.map(companyMember => {
         const member = companyMember.member;
-
-        // Filter assignments to only include projects that fall within the requested date range
-        const filteredAssignments = member.assignments?.filter(assignment => {
-          const project = assignment.project;
-
-          if (!companyProjectIds.has(project.id)) {
-            return false; // Skip projects not belonging to this company
-          }
-          // If project has no dates, include it
-          if (!project.startDate && !project.endDate) {
-            return true;
-          }
-
-          // Parse string dates (yyyy-mm-dd format)
-          const projectStartDate = project.startDate;
-          const projectEndDate = project.endDate;
-
-          // Check if project overlaps with the requested date range
-          const startsInRange = projectStartDate &&
-            projectStartDate >= startDate &&
-            projectStartDate <= endDate;
-
-          const endsInRange = projectEndDate &&
-            projectEndDate >= startDate &&
-            projectEndDate <= endDate;
-
-          const spansRange = projectStartDate && projectEndDate &&
-            projectStartDate <= startDate &&
-            projectEndDate >= endDate;
-
-          const ongoingInRange = projectStartDate && !projectEndDate &&
-            projectStartDate <= endDate;
-
-          const startedBeforeAndEndsAfter = projectStartDate && projectEndDate &&
-            projectStartDate <= endDate &&
-            projectEndDate >= startDate;
-
-          return startsInRange || endsInRange || spansRange || ongoingInRange || startedBeforeAndEndsAfter;
-        }) || [];
-
         const isInvited = !member.passwordHash || member.passwordHash === '';
+
+        // Get events for this member from the assignments
+        const memberAssignments = assignmentsByMember.get(member.id) || [];
+        const events = memberAssignments.map(eventAssignment => ({
+          eventId: eventAssignment.events.id,
+          name: eventAssignment.events.name,
+          date: eventAssignment.events.date,
+          startHour: eventAssignment.events.startHour,
+          endHour: eventAssignment.events.endHour,
+          location: eventAssignment.events.location,
+          reminders: eventAssignment.events.reminders,
+          isOther: eventAssignment.events.project.company?.id !== companyId, // Add isOther field
+          project: {
+            id: eventAssignment.events.project.id,
+            name: eventAssignment.events.project.name,
+            color: eventAssignment.events.project.color,
+            description: eventAssignment.events.project.description,
+            client: eventAssignment.events.project.client,
+            brief: eventAssignment.events.project.brief,
+            logistics: eventAssignment.events.project.logistics,
+            // Optionally include company info if needed
+            company: eventAssignment.events.project.company ? {
+              id: eventAssignment.events.project.company.id,
+              name: eventAssignment.events.project.company.name
+            } : null
+          },
+          assignment: {
+            id: eventAssignment.id,
+            role: eventAssignment.role?.name || "",
+            roleId: eventAssignment.role?.id || "",
+            instructions: eventAssignment.instructions,
+            googleEventId: eventAssignment.googleEventId
+          }
+        }));
 
         return {
           id: member.id,
-          name: member.name,
+          name: companyMember.name,
           email: member.email,
-          role: companyMember.role?.name || 'No Role Assigned', // Get role from CompanyMember
+          role: companyMember.role?.name || 'No Role Assigned',
           roleId: companyMember.role?.id || "",
-          phone: member.phone || '',
-          countryCode: member.countryCode || '',
-          location: member.location || '',
-          bio: member.bio || '',
-          profilePhoto: member.profilePhoto || '',
-          ringColor: member.ringColor || '',
+          phone: companyMember.phone || '',
+          location: companyMember.location || '',
+          bio: companyMember.bio || '',
+          profilePhoto: companyMember.profilePhoto || '',
+          ringColor: companyMember.ringColor || '',
           active: companyMember.active,
-          isAdmin: companyMember.isAdmin, // Get admin status from CompanyMember
-          skills: member.skills || [],
+          isAdmin: companyMember.isAdmin,
+          skills: companyMember.skills || [],
           companyId: companyId,
           companyMemberId: companyMember.id,
           isInvited: isInvited,
-          isOwner: company.email == member.email,
-          projects: filteredAssignments.map(assignment => {
-            return {
-              id: assignment.project.id,
-              name: assignment.project.name,
-              startDate: assignment.project.startDate,
-              endDate: assignment.project.endDate,
-              color: assignment.project.color,
-              assignedTo: member.name,
-              startHour: assignment.project.startHour,
-              endHour: assignment.project.endHour,
-              location: assignment.project.location,
-              description: assignment.project.description,
-              client: assignment.project.client,
-              newRole: assignment.role?.name || "",
-              roleId: assignment.role?.id || "",
-              brief: assignment.project.brief,
-              logistics: assignment.project.logistics
-            };
-          })
+          isOwner: company.email === member.email,
+          invitation: companyMember.invitation,
+          events: events
         };
+      });
+
+      // Sort members: admins first, then by name
+      let sortedMembersResponse = [...membersResponse].sort((a, b) => {
+        if (a.isAdmin && !b.isAdmin) return -1;
+        if (!a.isAdmin && b.isAdmin) return 1;
+        return a.name.localeCompare(b.name);
       });
 
       // If memberId is provided, sort to put that member first
       if (memberId) {
-        membersResponse = membersResponse.sort((a, b) => {
-          // Put the requested member at the top
+        sortedMembersResponse = sortedMembersResponse.sort((a, b) => {
           if (a.id === memberId) return -1;
           if (b.id === memberId) return 1;
-          return 0;
+          if (a.isAdmin && !b.isAdmin) return -1;
+          if (!a.isAdmin && b.isAdmin) return 1;
+          return a.name.localeCompare(b.name);
         });
       }
 
-      // Prepare response metadata based on view type
+      // Calculate summary statistics for other company events
+      // const totalEvents = sortedMembersResponse.reduce((sum, member) => sum + member.events.length, 0);
+      // const otherCompanyEvents = sortedMembersResponse.reduce((sum, member) =>
+      //   sum + member.events.filter((event: any) => event.isOther).length, 0
+      // );
+
+      // Prepare response metadata
       const responseMetadata = viewType === 'month'
         ? { month, year }
         : { week, year };
@@ -625,8 +823,8 @@ class MemberController {
         message: memberId
           ? `Member details retrieved successfully for ${viewType} view`
           : `Members retrieved successfully for ${viewType} view`,
-        members: membersResponse,
-        totalCount: membersResponse.length,
+        members: sortedMembersResponse,
+        totalCount: sortedMembersResponse.length,
         viewType,
         ...responseMetadata,
         dateRange: {
@@ -646,7 +844,7 @@ class MemberController {
 
   public getMembersWithCurrentFutureProjects = async (
     req: Request<{}, {}, IGetMembersWithProjectsRequest>,
-    res: Response<IGetMembersWithProjectsResponse>
+    res: Response<any>
   ) => {
     try {
       const { companyId, memberId } = req.body;
@@ -659,8 +857,7 @@ class MemberController {
       }
 
       const companyRepo = AppDataSource.getRepository(Company);
-      const companyMemberRepo = AppDataSource.getRepository(CompanyMember);
-      const projectRepo = AppDataSource.getRepository(Project);
+      const eventAssignmentRepo = AppDataSource.getRepository(EventAssignment);
 
       const company = await companyRepo.findOneBy({ id: companyId });
       if (!company) {
@@ -673,143 +870,152 @@ class MemberController {
       // Get current date in YYYY-MM-DD format
       const currentDate = new Date().toISOString().split('T')[0];
 
-      // Build query for company members with relations
-      const queryBuilder = companyMemberRepo.createQueryBuilder('companyMember')
-        .leftJoinAndSelect('companyMember.member', 'member')
-        .leftJoinAndSelect('companyMember.role', 'role')
-        .leftJoinAndSelect('member.assignments', 'assignments')
-        .leftJoinAndSelect('assignments.role', 'assignmentRole')
-        .leftJoinAndSelect('assignments.project', 'project')
-        .where('companyMember.companyId = :companyId', { companyId });
+      // Build query for event assignments with current and future events
+      const queryBuilder = eventAssignmentRepo.createQueryBuilder('eventAssignment')
+        .leftJoinAndSelect('eventAssignment.member', 'member')
+        .leftJoinAndSelect('eventAssignment.events', 'events')
+        .leftJoinAndSelect('eventAssignment.role', 'role')
+        .leftJoinAndSelect('events.project', 'project')
+        .leftJoinAndSelect('project.company', 'projectCompany') // Add project company relation
+        .leftJoinAndSelect('member.companyMembers', 'companyMembers')
+        .leftJoinAndSelect('companyMembers.company', 'company')
+        .leftJoinAndSelect('companyMembers.role', 'companyMemberRole')
+        .where('company.id = :companyId', { companyId })
+        .andWhere('events.date >= :currentDate', { currentDate });
 
       // If memberId is provided, filter for that specific member
       if (memberId) {
         queryBuilder.andWhere('member.id = :memberId', { memberId });
       }
 
-      const companyMembers = await queryBuilder
-        .orderBy('member.name', 'ASC')
+      const eventAssignments = await queryBuilder
+        .orderBy('events.date', 'ASC')
+        .addOrderBy('events.startHour', 'ASC')
         .getMany();
 
-      // If memberId was provided but no member found, return error
-      if (memberId && companyMembers.length === 0) {
-        return res.status(404).json({
-          success: false,
-          message: "Member not found in this company"
+      // Group event assignments by member
+      const membersMap = new Map();
+
+      eventAssignments.forEach(eventAssignment => {
+        const member = eventAssignment.member;
+        const companyMember = member.companyMembers?.find(cm => cm.company.id === companyId);
+
+        if (!membersMap.has(member.id)) {
+          const isInvited = !member.passwordHash || member.passwordHash === '';
+
+          membersMap.set(member.id, {
+            id: member.id,
+            name: companyMember?.name || member.email,
+            email: member.email,
+            role: companyMember?.role?.name || 'No Role Assigned',
+            roleId: companyMember?.role?.id || "",
+            phone: companyMember?.phone || '',
+            location: companyMember?.location || '',
+            bio: companyMember?.bio || '',
+            profilePhoto: companyMember?.profilePhoto || '',
+            ringColor: companyMember?.ringColor || '',
+            active: companyMember?.active ?? true,
+            isAdmin: companyMember?.isAdmin ?? false,
+            skills: companyMember?.skills || [],
+            companyId: companyId,
+            companyMemberId: companyMember?.id,
+            isInvited: isInvited,
+            isOwner: company.email === member.email,
+            invitation: companyMember?.invitation,
+            events: []
+          });
+        }
+
+        const memberData = membersMap.get(member.id);
+
+        // Determine event status
+        let status: 'current' | 'upcoming' = 'upcoming';
+        if (eventAssignment.events.date === currentDate) {
+          status = 'current';
+        }
+
+        // Check if project is from other company
+        const isOther = eventAssignment.events.project.company?.id !== companyId;
+
+        memberData.events.push({
+          eventId: eventAssignment.events.id,
+          name: eventAssignment.events.name,
+          date: eventAssignment.events.date,
+          startHour: eventAssignment.events.startHour,
+          endHour: eventAssignment.events.endHour,
+          location: eventAssignment.events.location,
+          reminders: eventAssignment.events.reminders,
+          status: status,
+          isOther: isOther, // Add isOther field
+          project: {
+            id: eventAssignment.events.project.id,
+            name: eventAssignment.events.project.name,
+            color: eventAssignment.events.project.color,
+            description: eventAssignment.events.project.description,
+            client: eventAssignment.events.project.client,
+            brief: eventAssignment.events.project.brief,
+            logistics: eventAssignment.events.project.logistics,
+            // Optionally include company info if needed
+            company: eventAssignment.events.project.company ? {
+              id: eventAssignment.events.project.company.id,
+              name: eventAssignment.events.project.company.name
+            } : null
+          },
+          assignment: {
+            id: eventAssignment.id,
+            role: eventAssignment.role?.name || "",
+            roleId: eventAssignment.role?.id || "",
+            instructions: eventAssignment.instructions,
+            googleEventId: eventAssignment.googleEventId
+          }
         });
-      }
-      // Get all company projects for validation
-      const companyProjects = await projectRepo.find({
-        where: { company: { id: companyId } },
-        select: ['id']
       });
 
-      const companyProjectIds = new Set(companyProjects.map(p => p.id));
+      const membersResponse = Array.from(membersMap.values());
 
-      // Format the response with proper type conversion and date filtering
-      const membersResponse: any[] = companyMembers.map(companyMember => {
-        const member = companyMember.member;
-
-        // Filter assignments to only include current and future projects
-        const filteredAssignments = member.assignments?.filter(assignment => {
-          const project = assignment.project;
-
-          if (!companyProjectIds.has(project.id)) {
-            return false; // Skip projects not belonging to this company
-          }
-
-          // If project has no end date, include it (considered ongoing)
-          if (!project.endDate) {
-            return true;
-          }
-
-          // If project has end date, check if it's current or future
-          // Current: endDate >= currentDate
-          // Future: startDate > currentDate (but we'll include anything that hasn't ended yet)
-          const projectEndDate = project.endDate;
-
-          // Include projects that haven't ended yet (endDate is today or in future)
-          return projectEndDate >= currentDate;
-        }) || [];
-
-        return {
-          id: member.id,
-          name: member.name,
-          email: member.email,
-          role: companyMember.role?.name || 'No Role Assigned', // Get from CompanyMember
-          roleId: companyMember.role?.id || "",
-          phone: member.phone || '',
-          countryCode: member.countryCode || '',
-          location: member.location || '',
-          bio: member.bio || '',
-          profilePhoto: member.profilePhoto || '',
-          ringColor: member.ringColor || '',
-          active: companyMember.active,
-          isAdmin: companyMember.isAdmin, // Get from CompanyMember
-          skills: member.skills || [],
-          companyId: companyId,
-          companyMemberId: companyMember.id, // Include junction table ID
-          projects: filteredAssignments.map(assignment => {
-            // Determine project status
-            let status: 'current' | 'upcoming' = 'current';
-            const projectStartDate = assignment.project.startDate;
-
-            if (projectStartDate && projectStartDate > currentDate) {
-              status = 'upcoming';
-            }
-
-            return {
-              id: assignment.project.id,
-              name: assignment.project.name,
-              startDate: assignment.project.startDate,
-              endDate: assignment.project.endDate,
-              color: assignment.project.color,
-              assignedTo: member.name,
-              startHour: assignment.project.startHour,
-              endHour: assignment.project.endHour,
-              location: assignment.project.location,
-              description: assignment.project.description,
-              client: assignment.project.client,
-              newRole: assignment.role?.name || "",
-              roleId: assignment.role?.id || "",
-              brief: assignment.project.brief,
-              logistics: assignment.project.logistics,
-              status: status // Add status to indicate if it's current or upcoming
-            };
-          })
-        };
-      });
-
-      // Calculate summary statistics
+      // Calculate summary statistics based on events
       const totalMembers = membersResponse.length;
-      const totalProjects = membersResponse.reduce((sum, member) => sum + member.projects.length, 0);
-      const currentProjects = membersResponse.reduce((sum, member) =>
-        sum + member.projects.filter(p => p.status === 'current').length, 0
-      );
-      const upcomingProjects = membersResponse.reduce((sum, member) =>
-        sum + member.projects.filter(p => p.status === 'upcoming').length, 0
-      );
+      let totalEvents = 0;
+      let currentEvents = 0;
+      let upcomingEvents = 0;
+      let otherCompanyEvents = 0;
+
+      membersResponse.forEach(member => {
+        member.events.forEach((event: any) => {
+          totalEvents++;
+          if (event.status === 'current') {
+            currentEvents++;
+          } else {
+            upcomingEvents++;
+          }
+          if (event.isOther) {
+            otherCompanyEvents++;
+          }
+        });
+      });
 
       return res.status(200).json({
         success: true,
         message: memberId
-          ? `Member with current and future projects retrieved successfully`
-          : `Members with current and future projects retrieved successfully`,
+          ? `Member with current and future events retrieved successfully`
+          : `Members with current and future events retrieved successfully`,
         members: membersResponse,
         totalCount: totalMembers,
         summary: {
-          totalProjects,
-          currentProjects,
-          upcomingProjects,
+          totalEvents,
+          currentEvents,
+          upcomingEvents,
+          otherCompanyEvents,
+          ownCompanyEvents: totalEvents - otherCompanyEvents,
           asOfDate: currentDate
         }
       });
 
     } catch (err) {
-      console.error("Error fetching members with projects:", err);
+      console.error("Error fetching members with events:", err);
       return res.status(500).json({
         success: false,
-        message: "Server error while fetching members with projects"
+        message: "Server error while fetching members with events"
       });
     }
   };
@@ -930,15 +1136,14 @@ class MemberController {
       }
 
       // Update member fields if provided
-      if (name !== undefined) member.name = name;
+      if (name !== undefined) companyMember.name = name;
       if (email !== undefined) member.email = email;
-      if (countryCode !== undefined) member.countryCode = countryCode;
-      if (phone !== undefined) member.phone = phone;
-      if (location !== undefined) member.location = location;
-      if (bio !== undefined) member.bio = bio;
-      if (skills !== undefined) member.skills = skillsArray;
-      if (profilePhoto !== undefined) member.profilePhoto = profilePhoto;
-      if (ringColor !== undefined) member.ringColor = ringColor;
+      if (phone !== undefined) companyMember.phone = phone;
+      if (location !== undefined) companyMember.location = location;
+      if (bio !== undefined) companyMember.bio = bio;
+      if (skills !== undefined) companyMember.skills = skillsArray;
+      if (profilePhoto !== undefined) companyMember.profilePhoto = profilePhoto;
+      if (ringColor !== undefined) companyMember.ringColor = ringColor;
 
       // Update CompanyMember relation fields if provided
       if (roleId !== undefined) {
@@ -1017,8 +1222,16 @@ class MemberController {
 
   public uploadProfilePhoto = async (req: Request, res: Response) => {
     try {
-      const { memberId } = req.body;
+      const { memberId, companyId } = req.body;
       const file = (req as any).file;
+
+      // Validation
+      if (!memberId || !companyId) {
+        return res.status(400).json({
+          success: false,
+          message: "Member ID and Company ID are required"
+        });
+      }
 
       if (!file) {
         return res.status(400).json({
@@ -1026,33 +1239,73 @@ class MemberController {
           message: "No file uploaded"
         });
       }
-      const memberRepo = AppDataSource.getRepository(Member);
-      const member = await memberRepo.findOneBy({ id: memberId });
-      if (!member) {
-        return res.status(404).json({
+
+      // Validate file type
+      const allowedMimeTypes = ['image/jpeg', 'image/png', 'image/gif', 'image/webp'];
+      if (!allowedMimeTypes.includes(file.mimetype)) {
+        return res.status(400).json({
           success: false,
-          message: "Member not found"
+          message: "Invalid file type. Only JPEG, PNG, GIF, and WebP images are allowed"
         });
       }
 
-      if (file.s3Key) {
-
-        member.profilePhoto = file.s3Key;
-
-        const savedMember = await memberRepo.save(member);
-
-        return res.status(200).json({
-          success: true,
-          message: "Profile photo uploaded successfully",
-          profilePhotoPath: file.s3Key
+      // Validate file size (e.g., 5MB max)
+      const maxSize = 5 * 1024 * 1024;
+      if (file.size > maxSize) {
+        return res.status(400).json({
+          success: false,
+          message: "File size too large. Maximum size is 5MB"
         });
-      } else {
-        console.log('No s3Key found in file object');
+      }
+
+      const companyMemberRepo = AppDataSource.getRepository(CompanyMember);
+
+      // Find the company member relationship
+      const companyMember = await companyMemberRepo.findOne({
+        where: {
+          member: { id: memberId },
+          company: { id: companyId }
+        },
+        relations: ["member", "company"]
+      });
+
+      if (!companyMember) {
+        return res.status(404).json({
+          success: false,
+          message: "Member not found in this company"
+        });
+      }
+
+      // Delete old profile photo if exists
+      if (companyMember.profilePhoto) {
+        await this.deleteProfilePhotoFromS3(companyMember.profilePhoto);
+      }
+
+      if (!file.s3Key) {
+        console.error('No s3Key found in file object');
         return res.status(500).json({
           success: false,
           message: "Failed to upload profile photo - no s3Key"
         });
       }
+
+      // Update company member profile photo
+      companyMember.profilePhoto = file.s3Key;
+      companyMember.updatedAt = new Date();
+
+      await companyMemberRepo.save(companyMember);
+
+      return res.status(200).json({
+        success: true,
+        message: "Profile photo uploaded successfully",
+        profilePhotoPath: file.s3Key,
+        companyMember: {
+          id: companyMember.id,
+          profilePhoto: file.s3Key,
+          memberId: companyMember.member.id,
+          companyId: companyMember.company.id
+        }
+      });
 
     } catch (error) {
       console.error("Error uploading profile photo:", error);
@@ -1062,6 +1315,7 @@ class MemberController {
       });
     }
   };
+
   public removeProfilePhoto = async (
     req: Request<{ id: string }>,
     res: Response
@@ -1070,49 +1324,66 @@ class MemberController {
       const { id: memberId } = req.params;
       const companyId = res.locals.token?.companyId;
 
-      const memberRepo = AppDataSource.getRepository(Member);
-      // Find the member
-      const member = await memberRepo.findOne({
-        where: { id: memberId },
-        relations: ["company"]
-      });
-
-      if (!member) {
-        return res.status(404).json({
+      // Validation
+      if (!memberId) {
+        return res.status(400).json({
           success: false,
-          message: "Member not found"
+          message: "Member ID is required"
         });
       }
 
+      if (!companyId) {
+        return res.status(400).json({
+          success: false,
+          message: "Company ID is required"
+        });
+      }
 
-      // Check if member has a profile photo
-      if (!member.profilePhoto) {
+      const companyMemberRepo = AppDataSource.getRepository(CompanyMember);
+
+      // Find the company member relationship
+      const companyMember = await companyMemberRepo.findOne({
+        where: {
+          member: { id: memberId },
+          company: { id: companyId }
+        },
+        relations: ["member", "company"]
+      });
+
+      if (!companyMember) {
+        return res.status(404).json({
+          success: false,
+          message: "Member not found in this company"
+        });
+      }
+
+      // Check if company member has a profile photo
+      if (!companyMember.profilePhoto) {
         return res.status(400).json({
           success: false,
           message: "Member does not have a profile photo to remove"
         });
       }
 
-      const bucketName = process.env.AWS_S3_BUCKET_NAME;
-      if (bucketName && member.profilePhoto) {
-        try {
-          const deleteResult = await deleteFromS3(bucketName, member.profilePhoto);
+      // Delete from S3
+      await this.deleteProfilePhotoFromS3(companyMember.profilePhoto);
 
-          if (!deleteResult.success) {
-            console.error("Failed to delete file from S3:", deleteResult.error);
-          }
-        } catch (s3Error) {
-          console.error("Error deleting file from S3:", s3Error);
-        }
-      }
+      // Update company member record
+      companyMember.profilePhoto = null;
+      companyMember.updatedAt = new Date();
 
-      member.profilePhoto = null;
-      const updatedMember = await memberRepo.save(member);
+      const updatedCompanyMember = await companyMemberRepo.save(companyMember);
 
       return res.status(200).json({
         success: true,
         message: "Profile photo removed successfully",
-        member: updatedMember
+        companyMember: {
+          id: updatedCompanyMember.id,
+          profilePhoto: updatedCompanyMember.profilePhoto,
+          memberId: updatedCompanyMember.member.id,
+          companyId: updatedCompanyMember.company.id,
+          updatedAt: updatedCompanyMember.updatedAt
+        }
       });
 
     } catch (err) {
@@ -1123,6 +1394,32 @@ class MemberController {
       });
     }
   };
+
+  private async deleteProfilePhotoFromS3(profilePhotoKey: string): Promise<void> {
+    const bucketName = process.env.AWS_S3_BUCKET_NAME;
+
+    if (!bucketName) {
+      console.error("AWS_S3_BUCKET_NAME environment variable is not set");
+      return;
+    }
+
+    if (!profilePhotoKey) {
+      console.warn("No profile photo key provided for deletion");
+      return;
+    }
+
+    try {
+      const deleteResult = await deleteFromS3(bucketName, profilePhotoKey);
+
+      if (!deleteResult.success) {
+        console.error("Failed to delete file from S3:", deleteResult.error);
+        // Don't throw error here - we still want to update the database
+      }
+    } catch (s3Error) {
+      console.error("Error deleting file from S3:", s3Error);
+      // Don't throw error here - we still want to update the database
+    }
+  }
   public memberLogin = async (req: Request, res: Response) => {
     const { email, password, rememberMe } = req.body;
 
@@ -1146,26 +1443,43 @@ class MemberController {
           message: "Member is not associated with any company"
         });
       }
+
       const isMatch = await bcrypt.compare(password, member.passwordHash || "");
-      if (!isMatch) {
-        return res.status(401).json({ success: false, message: "Invalid credentials" });
+      // if (!isMatch) {
+      //   return res.status(401).json({ success: false, message: "Invalid credentials" });
+      // }
+
+      const activeCompanyMembers = member.companyMembers.filter(
+        cm => cm.invitation == 'accepted'
+      );
+
+      if (activeCompanyMembers.length === 0) {
+        return res.status(403).json({
+          success: false,
+          message: "Member is not associated with any company"
+        });
       }
 
-      const primaryCompanyMember = member.companyMembers[0];
+      // ✅ Find company where company email matches member email
+      const emailMatchCompanyMember = activeCompanyMembers.find(
+        (cm) => cm.company.email.toLowerCase() === lowerCaseEmail
+      );
+
+      // ✅ Use email-matched company if found, otherwise use first company
+      const primaryCompanyMember = emailMatchCompanyMember || activeCompanyMembers[0];
       const primaryCompany = primaryCompanyMember.company;
       const companyId = primaryCompany?.id ?? null;
 
-      const associatedCompanies = member.companyMembers.map((cm) => ({
+      const associatedCompanies = activeCompanyMembers.map((cm) => ({
         id: cm.company.id,
         name: cm.company.name,
         email: cm.company.email,
         country: cm.company.country,
         isAdmin: cm.isAdmin,
-        role: cm.role ? cm.role.name : null,
-        roleId: cm.role ? cm.role.id : null
+        isEmailMatch: cm.company.email.toLowerCase() === lowerCaseEmail
       }));
-      // Create JWT with user type based on isAdmin
 
+      // Create JWT with user type based on isAdmin
       const token = jwt.sign(
         {
           memberId: member.id,
@@ -1180,17 +1494,17 @@ class MemberController {
       // Build unified user response
       const userData = {
         id: member.id,
-        name: member.name,
+        name: primaryCompanyMember.name,
         email: member.email,
         role: primaryCompanyMember.role ? primaryCompanyMember.role.name : null,
         roleId: primaryCompanyMember.role ? primaryCompanyMember.role.id : null,
         isAdmin: primaryCompanyMember.isAdmin,
-        location: member.location ?? null,
-        profilePhoto: member.profilePhoto ?? null,
-        phone: member.phone ?? null,
-        countryCode: member.countryCode ?? null,
+        location: primaryCompanyMember.location ?? null,
+        profilePhoto: primaryCompanyMember.profilePhoto ?? null,
+        phone: primaryCompanyMember.phone ?? null,
         company: {
           id: companyId,
+          logo: primaryCompany?.logo ?? null,
           name: primaryCompany?.name ?? null,
           email: primaryCompany?.email ?? null,
           country: primaryCompany?.country ?? null,
@@ -1201,9 +1515,12 @@ class MemberController {
 
       return res.status(200).json({
         success: true,
-        message: "Login successful",
+        message: emailMatchCompanyMember
+          ? "Login successful - Auto-selected company with matching email"
+          : "Login successful",
         token,
-        user: userData
+        user: userData,
+        autoSelected: !!emailMatchCompanyMember
       });
     } catch (error) {
       console.error(error);
@@ -1337,38 +1654,126 @@ class MemberController {
     res: Response
   ) => {
     try {
-      const { companyId, startDate, endDate, startHour, endHour, excludeProjectId } = req.body;
-
-      // Validation
+      const { companyId, eventDate, startHour, endHour, excludeEventId } = req.body;
+      // Validation - if any required parameter is null, return all members
       if (
         !companyId ||
-        !startDate ||
-        !endDate ||
+        !eventDate ||
         startHour === undefined ||
-        endHour === undefined
+        startHour === null ||
+        endHour === undefined ||
+        endHour === null
       ) {
-        return res.status(400).json({
-          success: false,
-          message:
-            "Company ID, start date, end date, start hour, and end hour are required",
+        // Fetch company to verify it exists
+        const companyRepo = AppDataSource.getRepository(Company);
+        const companyMemberRepo = AppDataSource.getRepository(CompanyMember);
+
+        const company = await companyRepo.findOneBy({ id: companyId });
+        if (!company) {
+          return res.status(404).json({
+            success: false,
+            message: "Company not found",
+          });
+        }
+
+        // Fetch all active company members without filtering
+        const companyMembers = await companyMemberRepo.find({
+          where: {
+            company: { id: companyId },
+            active: true
+          },
+          relations: [
+            "member",
+            "member.eventAssignments",
+            "member.eventAssignments.role",
+            "member.eventAssignments.events",
+            "member.eventAssignments.events.project",
+            "role"
+          ],
+          select: {
+            id: true,
+            name: true,
+            phone: true,
+            profilePhoto: true,
+            location: true,
+            bio: true,
+            skills: true,
+            ringColor: true,
+            isAdmin: true,
+            active: true,
+            role: {
+              id: true,
+              name: true
+            },
+            member: {
+              id: true,
+              email: true,
+              active: true,
+              eventAssignments: {
+                id: true,
+                role: {
+                  id: true,
+                  name: true
+                },
+                events: {
+                  id: true,
+                  date: true,
+                  startHour: true,
+                  endHour: true,
+                  location: true,
+                  project: {
+                    id: true,
+                    name: true,
+                    color: true,
+                    description: true
+                  }
+                }
+              },
+            },
+          },
+        });
+
+        // Transform all members as fully available
+        const allMembers: IAvailableMemberResponse[] = companyMembers.map(companyMember => ({
+          id: companyMember.member.id,
+          profilePhoto: companyMember.profilePhoto,
+          name: companyMember.name,
+          email: companyMember.member.email,
+          role: companyMember.role?.name || "",
+          roleId: companyMember.role?.id || "",
+          phone: companyMember.phone || "",
+          location: companyMember.location || "",
+          bio: companyMember.bio || "",
+          skills: companyMember.skills || [],
+          ringColor: companyMember.ringColor || "",
+          isAdmin: companyMember.isAdmin,
+          companyMemberId: companyMember.id,
+          availabilityStatus: "fully_available",
+          conflicts: [],
+        }));
+
+        return res.status(200).json({
+          success: true,
+          message: "All company members retrieved (no date/time filters applied)",
+          data: {
+            availableMembers: allMembers,
+            totalFullyAvailable: allMembers.length,
+            totalPartiallyAvailable: 0,
+            totalUnavailable: 0,
+            totalMembers: companyMembers.length,
+            dateRange: null,
+            note: "No date/time filters were applied - all members returned as fully available"
+          },
         });
       }
 
-      // Validate date format and logic
-      const start = new Date(startDate);
-      const end = new Date(endDate);
+      // Validate date format (only if all parameters are provided)
+      const eventDateTime = new Date(eventDate);
 
-      if (isNaN(start.getTime()) || isNaN(end.getTime())) {
+      if (isNaN(eventDateTime.getTime())) {
         return res.status(400).json({
           success: false,
           message: "Invalid date format. Use yyyy-mm-dd",
-        });
-      }
-
-      if (start > end) {
-        return res.status(400).json({
-          success: false,
-          message: "Start date cannot be after end date",
         });
       }
 
@@ -1397,7 +1802,6 @@ class MemberController {
       // Fetch company
       const companyRepo = AppDataSource.getRepository(Company);
       const companyMemberRepo = AppDataSource.getRepository(CompanyMember);
-      const memberRepo = AppDataSource.getRepository(Member);
 
       const company = await companyRepo.findOneBy({ id: companyId });
       if (!company) {
@@ -1407,49 +1811,58 @@ class MemberController {
         });
       }
 
-      // Fetch company members with assignments and projects
+      // Fetch company members with event assignments and events
       const companyMembers = await companyMemberRepo.find({
         where: {
           company: { id: companyId },
+          active: true // Only include active company members
         },
         relations: [
           "member",
-          "member.assignments",
-          "member.assignments.role",
-          "member.assignments.project",
+          "member.eventAssignments",
+          "member.eventAssignments.role",
+          "member.eventAssignments.events",
+          "member.eventAssignments.events.project",
           "role"
         ],
         select: {
           id: true,
+          name: true,
+          phone: true,
+          profilePhoto: true,
+          location: true,
+          bio: true,
+          skills: true,
+          ringColor: true,
           isAdmin: true,
+          active: true,
           role: {
             id: true,
             name: true
           },
           member: {
             id: true,
-            profilePhoto: true,
-            name: true,
             email: true,
-            bio: true,
-            location: true,
-            phone: true,
-            countryCode: true,
-            skills: true,
-            assignments: {
+            active: true,
+            eventAssignments: {
               id: true,
               role: {
                 id: true,
                 name: true
               },
-              project: {
+              events: {
                 id: true,
-                name: true,
-                startDate: true,
-                endDate: true,
+                date: true,
                 startHour: true,
                 endHour: true,
-              },
+                location: true,
+                project: {
+                  id: true,
+                  name: true,
+                  color: true,
+                  description: true
+                }
+              }
             },
           },
         },
@@ -1457,64 +1870,68 @@ class MemberController {
 
       // Helper methods to check conflicts
       const hasDateConflict = (
-        project: any,
-        startDate: string,
-        endDate: string
+        event: Events,
+        requestedDate: string
       ): boolean => {
-        const projStart = new Date(project.startDate);
-        const projEnd = new Date(project.endDate);
-        const start = new Date(startDate);
-        const end = new Date(endDate);
-        return !(end < projStart || start > projEnd);
+        const eventDateObj = new Date(event.date);
+        const requestedDateObj = new Date(requestedDate);
+
+        // Check if the event date is the same as the requested date
+        return eventDateObj.toDateString() === requestedDateObj.toDateString();
       };
 
       const hasHourConflict = (
-        project: any,
+        event: Events,
         startHour: number,
         endHour: number
       ): boolean => {
         // Check if time intervals overlap
-        return !(endHour <= project.startHour || startHour >= project.endHour);
+        return !(endHour <= event.startHour || startHour >= event.endHour);
       };
 
       const availableMembers: IAvailableMemberResponse[] = [];
 
       for (const companyMember of companyMembers) {
         const member = companyMember.member;
-        const conflicts: IConflict[] = [];
+        const conflicts: any[] = [];
 
-        if (member.assignments && member.assignments.length > 0) {
-          for (const assignment of member.assignments) {
-            const project = assignment.project;
+        if (member.eventAssignments && member.eventAssignments.length > 0) {
+          for (const assignment of member.eventAssignments) {
+            const event = assignment.events;
 
-            if (excludeProjectId && project.id === excludeProjectId) {
+            if (!event) continue;
+
+            // Skip if this is the event we're excluding
+            if (excludeEventId && event.id === excludeEventId) {
               continue;
             }
 
-            const hasDateOverlap = hasDateConflict(project, startDate, endDate);
+            const hasDateMatch = hasDateConflict(event, eventDate);
 
-            if (hasDateOverlap) {
-              const hasHourConf = hasHourConflict(project, startHour, endHour);
+            if (hasDateMatch) {
+              const hasHourConf = hasHourConflict(event, startHour, endHour);
 
               if (hasHourConf) {
                 conflicts.push({
-                  projectId: project.id,
-                  projectName: project.name,
-                  startDate: project.startDate || "",
-                  endDate: project.endDate || "",
-                  startHour: project.startHour || 0,
-                  endHour: project.endHour || 0,
+                  projectId: event.project?.id || "",
+                  projectName: event.project?.name || "Unknown Project",
+                  eventDate: event.date,
+                  startHour: event.startHour,
+                  endHour: event.endHour,
                   conflictType: "date_and_time",
+                  eventId: event.id,
+                  eventName: event.name
                 });
               } else {
                 conflicts.push({
-                  projectId: project.id,
-                  projectName: project.name,
-                  startDate: project.startDate || "",
-                  endDate: project.endDate || "",
-                  startHour: project.startHour || 0,
-                  endHour: project.endHour || 0,
+                  projectId: event.project?.id || "",
+                  projectName: event.project?.name || "Unknown Project",
+                  eventDate: event.date,
+                  startHour: event.startHour,
+                  endHour: event.endHour,
                   conflictType: "date_only",
+                  eventId: event.id,
+                  eventName: event.name
                 });
               }
             }
@@ -1531,16 +1948,16 @@ class MemberController {
         if (conflicts.length === 0) {
           availableMembers.push({
             id: member.id,
-            profilePhoto: member.profilePhoto,
-            name: member.name,
+            profilePhoto: companyMember.profilePhoto,
+            name: companyMember.name,
             email: member.email,
             role: companyMember.role?.name || "", // Get role from CompanyMember
             roleId: companyMember.role?.id || "", // Include roleId
-            phone: member.phone || "",
-            countryCode: member.countryCode || "",
-            location: member.location || "",
-            bio: member.bio || "",
-            skills: member.skills || [],
+            phone: companyMember.phone || "",
+            location: companyMember.location || "",
+            bio: companyMember.bio || "",
+            skills: companyMember.skills || [],
+            ringColor: companyMember.ringColor || "", // Include ringColor from CompanyMember
             isAdmin: companyMember.isAdmin, // Include admin status
             companyMemberId: companyMember.id, // Include junction table ID
             availabilityStatus: "fully_available",
@@ -1549,16 +1966,16 @@ class MemberController {
         } else if (fullConflicts.length === 0 && dateOnlyConflicts.length > 0) {
           availableMembers.push({
             id: member.id,
-            profilePhoto: member.profilePhoto,
-            name: member.name,
+            profilePhoto: companyMember.profilePhoto,
+            name: companyMember.name,
             email: member.email,
             role: companyMember.role?.name || "",
             roleId: companyMember.role?.id || "",
-            phone: member.phone || "",
-            countryCode: member.countryCode || "",
-            location: member.location || "",
-            bio: member.bio || "",
-            skills: member.skills || [],
+            phone: companyMember.phone || "",
+            location: companyMember.location || "",
+            bio: companyMember.bio || "",
+            skills: companyMember.skills || [],
+            ringColor: companyMember.ringColor || "",
             isAdmin: companyMember.isAdmin,
             companyMemberId: companyMember.id,
             availabilityStatus: "partially_available",
@@ -1567,16 +1984,16 @@ class MemberController {
         } else {
           availableMembers.push({
             id: member.id,
-            profilePhoto: member.profilePhoto,
-            name: member.name,
+            profilePhoto: companyMember.profilePhoto,
+            name: companyMember.name,
             email: member.email,
             role: companyMember.role?.name || "",
             roleId: companyMember.role?.id || "",
-            phone: member.phone || "",
-            countryCode: member.countryCode || "",
-            location: member.location || "",
-            bio: member.bio || "",
-            skills: member.skills || [],
+            phone: companyMember.phone || "",
+            location: companyMember.location || "",
+            bio: companyMember.bio || "",
+            skills: companyMember.skills || [],
+            ringColor: companyMember.ringColor || "",
             isAdmin: companyMember.isAdmin,
             companyMemberId: companyMember.id,
             availabilityStatus: "unavailable",
@@ -1600,12 +2017,9 @@ class MemberController {
             (m) => m.availabilityStatus === "unavailable"
           ).length,
           totalMembers: companyMembers.length,
-          dateRange: {
-            startDate,
-            endDate,
-            startHour,
-            endHour,
-          },
+          eventDate,
+          startHour,
+          endHour,
         },
       });
     } catch (err) {
@@ -1679,7 +2093,6 @@ class MemberController {
 
     return false;
   }
-
   public updateRingColor = async (
     req: Request<{ id: string }, {}, IUpdateRingColorRequest>,
     res: Response<IUpdateRingColorResponse>
@@ -1697,6 +2110,13 @@ class MemberController {
         });
       }
 
+      if (!companyId) {
+        return res.status(400).json({
+          success: false,
+          message: "Company ID is required"
+        });
+      }
+
       // Validate color format (hex color or CSS color name)
       const colorRegex = /^#([A-Fa-f0-9]{6}|[A-Fa-f0-9]{3})$|^[a-zA-Z]+$/;
       if (!colorRegex.test(ringColor)) {
@@ -1706,48 +2126,40 @@ class MemberController {
         });
       }
 
-      const memberRepo = AppDataSource.getRepository(Member);
       const companyMemberRepo = AppDataSource.getRepository(CompanyMember);
 
-      // Find member
-      const member = await memberRepo.findOne({
-        where: { id: memberId }
+      // Find company member relationship
+      const companyMember = await companyMemberRepo.findOne({
+        where: {
+          member: { id: memberId },
+          company: { id: companyId }
+        },
+        relations: ["member", "company"]
       });
 
-      if (!member) {
+      if (!companyMember) {
         return res.status(404).json({
           success: false,
-          message: "Member not found"
+          message: "Member not found in this company"
         });
       }
 
-      // If companyId is provided, verify the member belongs to the company
-      if (companyId) {
-        const companyMember = await companyMemberRepo.findOne({
-          where: {
-            member: { id: memberId },
-            company: { id: companyId }
-          }
-        });
+      // Update ring color (now company-specific)
+      companyMember.ringColor = ringColor;
+      companyMember.updatedAt = new Date();
 
-        if (!companyMember) {
-          return res.status(403).json({
-            success: false,
-            message: "Member does not belong to this company"
-          });
-        }
-      }
-
-      // Update ring color (this is member-specific, not company-specific)
-      member.ringColor = ringColor;
-      member.updatedAt = new Date();
-
-      const updatedMember = await memberRepo.save(member);
+      const updatedCompanyMember = await companyMemberRepo.save(companyMember);
 
       return res.status(200).json({
         success: true,
         message: "Ring color updated successfully",
-        member: updatedMember
+        companyMember: {
+          id: updatedCompanyMember.id,
+          ringColor: updatedCompanyMember.ringColor,
+          memberId: updatedCompanyMember.member.id,
+          companyId: updatedCompanyMember.company.id,
+          updatedAt: updatedCompanyMember.updatedAt
+        }
       });
 
     } catch (err) {
