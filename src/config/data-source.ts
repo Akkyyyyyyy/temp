@@ -11,6 +11,7 @@ import { Role } from "../entity/Role";
 import { CompanyMember } from "../entity/CompanyMember";
 import { Events } from "../entity/Events";
 import { EventAssignment } from "../entity/EventAssignment";
+import { CustomReminder } from "../entity/CustomReminder";
 
 
 export const AppDataSource = new DataSource({
@@ -22,7 +23,7 @@ export const AppDataSource = new DataSource({
     database: process.env.DB_DATABASE,
     synchronize: true,
     logging: false,
-    entities: [Company, Member, CompanyMember, Project, Events, EventAssignment, GoogleToken, Package, Role],
+    entities: [Company, Member, CompanyMember, Project, Events, EventAssignment, GoogleToken, Package, Role, CustomReminder],
     migrations: [],
     subscribers: [],
     // ssl: {

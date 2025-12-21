@@ -9,6 +9,7 @@ import {
 } from "typeorm";
 import { Project } from "./Project";
 import { EventAssignment } from "./EventAssignment";
+import { CustomReminder } from "./CustomReminder";
 
 export interface IEvents {
   id: string;
@@ -19,6 +20,7 @@ export interface IEvents {
   project: Project;
   reminders:IReminders;
   assignments?: EventAssignment[];
+  customReminders?: CustomReminder[];
   createdAt: Date;
   updatedAt: Date;
 }
@@ -60,6 +62,9 @@ export class Events implements IEvents {
 
   @OneToMany(() => EventAssignment, (assignment) => assignment.events)
   assignments: EventAssignment[];
+
+  @OneToMany(() => CustomReminder, (customReminder) => customReminder.event)
+  customReminders: CustomReminder[];
 
   @CreateDateColumn()
   createdAt: Date;

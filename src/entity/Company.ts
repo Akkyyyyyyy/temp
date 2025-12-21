@@ -20,6 +20,7 @@ export interface ICompany {
   country: string;
   members?: Member[];
   projects?: Project[];
+  lockedDates?: string[];
   roles?: Role[];
   createdAt: Date;
   updatedAt: Date;
@@ -44,6 +45,9 @@ export class Company implements ICompany {
 
   @Column("decimal", { scale: 2, nullable: true })
   price: number | null;
+
+  @Column("simple-array", { nullable: true })
+  lockedDates: string[];
 
   @OneToMany(() => CompanyMember, (companyMember) => companyMember.company)
   companyMembers: CompanyMember[];

@@ -48,18 +48,21 @@ export interface IMemberResponse {
   skills: string[];
   companyId: string;
   companyMemberId: string;
-  isInvited: boolean, 
-  isOwner:boolean,
-  invitation:string,
+  isInvited: boolean,
+  isOwner: boolean,
+  invitation: string,
   projects?: IProjectResponse[],
-  isAdmin:boolean
+  isAdmin: boolean
 }
 
 export interface IGetMembersByCompanyResponse {
   success: boolean;
   message: string;
-  members?: IMemberResponse[];
+  members?: any[];
   totalCount?: number;
+  totalProjectEvents?: number;
+  totalGoogleEvents?: number;
+  totalEvents?: number;
   viewType?: 'month' | 'week';
   month?: number;
   year?: number;
@@ -68,6 +71,7 @@ export interface IGetMembersByCompanyResponse {
     startDate: string;
     endDate: string;
   };
+  lockedDates?:string[];
 }
 
 export interface IUpdateMemberRequest {
@@ -126,6 +130,7 @@ export interface IAvailableMemberResponse {
   ringColor: string; // Added ringColor field
   availabilityStatus: "fully_available" | "partially_available" | "unavailable";
   conflicts: IConflict[];
+  hasGoogleCalendar: any;
 }
 
 export interface IUpdateRingColorRequest {

@@ -468,6 +468,156 @@ class CompanyController {
             // Don't throw error here - we still want to update the database
         }
     }
+    public lockDate = async (req: Request, res: Response) => {
+        try {
+            const { companyId, date } = req.body;
+
+            if (!companyId || !date) {
+                return res.status(400).json({
+                    success: false,
+                    message: "Company ID and date are required"
+                });
+            }
+
+            // Validate date format (YYYY-MM-DD)
+            const dateRegex = /^\d{4}-\d{2}-\d{2}$/;
+            if (!dateRegex.test(date)) {
+                return res.status(400).json({
+                    success: false,
+                    message: "Date must be in YYYY-MM-DD format"
+                });
+            }
+
+            // Check if date is valid
+            const parsedDate = new Date(date);
+            if (isNaN(parsedDate.getTime())) {
+                return res.status(400).json({
+                    success: false,
+                    message: "Invalid date provided"
+                });
+            }
+
+            const companyRepository = AppDataSource.getRepository(Company);
+            const company = await companyRepository.findOneBy({ id: companyId });
+
+            if (!company) {
+                return res.status(404).json({
+                    success: false,
+                    message: "Company not found"
+                });
+            }
+
+            // Initialize lockedDates array if it doesn't exist
+            if (!company.lockedDates) {
+                company.lockedDates = [];
+            }
+
+            // Check if date is already locked
+            if (company.lockedDates.includes(date)) {
+                return res.status(400).json({
+                    success: false,
+                    message: "Date is already locked",
+                    date: date,
+                    lockedDates: company.lockedDates
+                });
+            }
+
+            // Add date to lockedDates
+            company.lockedDates.push(date);
+
+            // Sort dates chronologically
+            company.lockedDates.sort((a, b) => new Date(a).getTime() - new Date(b).getTime());
+
+            await companyRepository.save(company);
+
+            return res.status(200).json({
+                success: true,
+                message: "Date locked successfully",
+                date: date,
+                lockedDates: company.lockedDates,
+                company: {
+                    id: company.id,
+                    name: company.name
+                }
+            });
+
+        } catch (err) {
+            console.error("Error locking date:", err);
+            return res.status(500).json({
+                success: false,
+                message: "Server error while locking date"
+            });
+        }
+    };
+    public unlockDate = async (req: Request, res: Response) => {
+        try {
+            const { companyId, date } = req.body;
+
+            if (!companyId || !date) {
+                return res.status(400).json({
+                    success: false,
+                    message: "Company ID and date are required"
+                });
+            }
+
+            const companyRepository = AppDataSource.getRepository(Company);
+            const company = await companyRepository.findOneBy({ id: companyId });
+
+            if (!company) {
+                return res.status(404).json({
+                    success: false,
+                    message: "Company not found"
+                });
+            }
+
+            // Initialize lockedDates array if it doesn't exist
+            if (!company.lockedDates || company.lockedDates.length === 0) {
+                return res.status(400).json({
+                    success: false,
+                    message: "No locked dates found for this company",
+                    date: date,
+                    lockedDates: []
+                });
+            }
+
+            // Check if date is locked
+            const dateIndex = company.lockedDates.indexOf(date);
+            if (dateIndex === -1) {
+                return res.status(400).json({
+                    success: false,
+                    message: "Date is not locked",
+                    date: date,
+                    lockedDates: company.lockedDates
+                });
+            }
+
+            // Remove date from lockedDates
+            company.lockedDates.splice(dateIndex, 1);
+
+            // Sort dates chronologically (after removal)
+            company.lockedDates.sort((a, b) => new Date(a).getTime() - new Date(b).getTime());
+
+            await companyRepository.save(company);
+
+            return res.status(200).json({
+                success: true,
+                message: "Date unlocked successfully",
+                date: date,
+                lockedDates: company.lockedDates,
+                company: {
+                    id: company.id,
+                    name: company.name
+                }
+            });
+
+        } catch (err) {
+            console.error("Error unlocking date:", err);
+            return res.status(500).json({
+                success: false,
+                message: "Server error while unlocking date"
+            });
+        }
+    };
 
 }
 

@@ -41,17 +41,4 @@ export class GoogleToken {
   @UpdateDateColumn()
   updatedAt: Date;
 
-  // Helper method to check if token is expired or about to expire
-  isExpired(): boolean {
-    const now = new Date();
-    const buffer = 5 * 60 * 1000; // 5 minutes buffer
-    return new Date(this.expiryDate.getTime() - buffer) <= now;
-  }
-
-  // Helper method to check if token will expire soon (within 10 minutes)
-  willExpireSoon(): boolean {
-    const now = new Date();
-    const threshold = 10 * 60 * 1000; // 10 minutes
-    return new Date(this.expiryDate.getTime() - threshold) <= now;
-  }
 }

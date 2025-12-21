@@ -10,6 +10,7 @@ AppDataSource.initialize().then(async () => {
   const app = express();
 
   app.use(bodyParser.json());
+  app.use(express.static("public"));
 
   app.use(cors({
     origin: process.env.VITE_FRONTEND_URL ,
@@ -27,6 +28,6 @@ AppDataSource.initialize().then(async () => {
   app.listen(port, () => {
     console.log(`Server is running on port ${port}`);
   });
-  // cronWorker.start();
+  cronWorker.start();
 
 }).catch(error => console.log(error));

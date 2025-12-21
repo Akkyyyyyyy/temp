@@ -7,6 +7,7 @@ import forgotPasswordRouter from "./ForgotPasswordRoute";
 import packageRouter from "./PackageRoute";
 import roleRouter from "./RoleRoute";
 import eventRouter from "./EventRoute";
+import customReminderRouter from "./customReminderRoute";
 
 
 const mainRouter = express.Router();
@@ -19,6 +20,7 @@ mainRouter.use("/calendar", googleCalendarRouter);
 mainRouter.use("/package", packageRouter);
 mainRouter.use("/roles", roleRouter);
 mainRouter.use("/event", eventRouter);
+mainRouter.use("/custom-reminders", customReminderRouter);
 
 
 export default mainRouter;

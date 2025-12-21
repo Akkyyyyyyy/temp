@@ -55,30 +55,30 @@ export const sendForgotPasswordEmail = async (
   await sendEmail(to, subject, html);
 };
 
-export const sendProjectReminderEmail = async (
+export const sendEventReminderEmail = async (
   to: string,
   memberName: string,
+  eventName: string,
   projectName: string,
-  projectDescription: string,
-  startDate: string,
-  startHour: number,
-  endHour: number,
+  eventDate: string,
+  startHour: string,
+  endHour: string,
   location: string,
   companyName: string,
   reminderType: 'weekBefore' | 'dayBefore',
-  daysUntilStart: number,
+  daysUntilEvent: number,
 ) => {
-  const { subject, html } = await emailRenderer.renderProjectReminderEmail({
+  const { subject, html } = await emailRenderer.renderEventReminderEmail({
     memberName,
+    eventName,
     projectName,
-    projectDescription,
-    startDate,
+    eventDate,
     startHour,
     endHour,
     location,
     companyName,
     reminderType,
-    daysUntilStart
+    daysUntilEvent
   });
 
   await sendEmail(to, subject, html);

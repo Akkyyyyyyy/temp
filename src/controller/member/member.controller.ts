@@ -14,6 +14,8 @@ import { CompanyMember } from "../../entity/CompanyMember";
 import { Project } from "../../entity/Project";
 import { Events } from "../../entity/Events";
 import { EventAssignment } from "../../entity/EventAssignment";
+import GoogleCalendarService from "../../utils/GoogleCalendarService";
+import { calendar } from '@googleapis/calendar';
 
 
 
@@ -611,130 +613,353 @@ class MemberController {
       return res.status(500).json({ success: false, message: "Server error" });
     }
   };
-  public getMembersByCompany = async (
-    req: Request<{}, {}, IGetMembersByCompanyRequest>,
-    res: Response<IGetMembersByCompanyResponse>
-  ) => {
-    try {
-      const { companyId, month, year, week, viewType, memberId } = req.body;
+public getMembersByCompany = async (
+  req: Request<{}, {}, IGetMembersByCompanyRequest>,
+  res: Response<IGetMembersByCompanyResponse>
+) => {
+  try {
+    const { companyId, month, year, week, viewType, memberId } = req.body;
 
-      if (!companyId) {
+    if (!companyId) {
+      return res.status(400).json({
+        success: false,
+        message: "Company ID is required"
+      });
+    }
+
+    if (!viewType || !['month', 'week'].includes(viewType)) {
+      return res.status(400).json({
+        success: false,
+        message: "Valid viewType (month or week) is required"
+      });
+    }
+
+    // Validate based on view type
+    if (viewType === 'month') {
+      if (!month || !year) {
         return res.status(400).json({
           success: false,
-          message: "Company ID is required"
+          message: "Month and year are required for month view"
         });
       }
-
-      if (!viewType || !['month', 'week'].includes(viewType)) {
+    } else if (viewType === 'week') {
+      if (!week || !year) {
         return res.status(400).json({
           success: false,
-          message: "Valid viewType (month or week) is required"
+          message: "Week and year are required for week view"
         });
       }
+    }
 
-      // Validate based on view type
-      if (viewType === 'month') {
-        if (!month || !year) {
-          return res.status(400).json({
-            success: false,
-            message: "Month and year are required for month view"
-          });
-        }
-      } else if (viewType === 'week') {
-        if (!week || !year) {
-          return res.status(400).json({
-            success: false,
-            message: "Week and year are required for week view"
-          });
-        }
-      }
+    const companyRepo = AppDataSource.getRepository(Company);
+    const companyMemberRepo = AppDataSource.getRepository(CompanyMember);
+    const eventAssignmentRepo = AppDataSource.getRepository(EventAssignment);
 
-      const companyRepo = AppDataSource.getRepository(Company);
-      const companyMemberRepo = AppDataSource.getRepository(CompanyMember);
-      const eventAssignmentRepo = AppDataSource.getRepository(EventAssignment);
+    const company = await companyRepo.findOneBy({ id: companyId });
+    if (!company) {
+      return res.status(404).json({
+        success: false,
+        message: "Company not found"
+      });
+    }
 
-      const company = await companyRepo.findOneBy({ id: companyId });
-      if (!company) {
-        return res.status(404).json({
-          success: false,
-          message: "Company not found"
-        });
-      }
+    // Calculate date ranges based on view type
+    let startDate: string;
+    let endDate: string;
 
-      // Calculate date ranges based on view type
-      let startDate: string;
-      let endDate: string;
+    if (viewType === 'month') {
+      startDate = `${year}-${month.toString().padStart(2, '0')}-01`;
+      const lastDay = new Date(year, month, 0).getDate();
+      endDate = `${year}-${month.toString().padStart(2, '0')}-${lastDay.toString().padStart(2, '0')}`;
+    } else {
+      const weekStart = this.getDateFromWeek(year, week);
+      const weekEnd = new Date(weekStart);
+      weekEnd.setDate(weekStart.getDate() + 6);
+      startDate = this.formatDate(weekStart);
+      endDate = this.formatDate(weekEnd);
+    }
+    let allLockedDates: string[] = [];
+    
+    if (company.lockedDates && company.lockedDates.length > 0) {
+      const start = new Date(startDate);
+      const end = new Date(endDate);
+      
+      allLockedDates = company.lockedDates.filter(lockedDateStr => {
+        const lockedDate = new Date(lockedDateStr);
+        return lockedDate >= start && lockedDate <= end;
+      });
+      
+    }
 
-      if (viewType === 'month') {
-        startDate = `${year}-${month.toString().padStart(2, '0')}-01`;
-        const lastDay = new Date(year, month, 0).getDate();
-        endDate = `${year}-${month.toString().padStart(2, '0')}-${lastDay.toString().padStart(2, '0')}`;
-      } else {
-        const weekStart = this.getDateFromWeek(year, week);
-        const weekEnd = new Date(weekStart);
-        weekEnd.setDate(weekStart.getDate() + 6);
-        startDate = this.formatDate(weekStart);
-        endDate = this.formatDate(weekEnd);
-      }
+    // First, get all company members (regardless of assignments)
+    const companyMembersQuery = companyMemberRepo.createQueryBuilder('companyMember')
+      .leftJoinAndSelect('companyMember.member', 'member')
+      .leftJoinAndSelect('member.googleTokens', 'googleTokens')
+      .leftJoinAndSelect('companyMember.role', 'role')
+      .where('companyMember.companyId = :companyId', { companyId });
 
-      // First, get all company members (regardless of assignments)
-      const companyMembersQuery = companyMemberRepo.createQueryBuilder('companyMember')
-        .leftJoinAndSelect('companyMember.member', 'member')
-        .leftJoinAndSelect('companyMember.role', 'role')
-        .where('companyMember.companyId = :companyId', { companyId });
+    // If memberId is provided, filter for that specific member
+    // if (memberId) {
+    //     companyMembersQuery.andWhere('member.id = :memberId', { memberId });
+    // }
 
-      // If memberId is provided, filter for that specific member
-      // if (memberId) {
-      //     companyMembersQuery.andWhere('member.id = :memberId', { memberId });
-      // }
+    const companyMembers = await companyMembersQuery
+      .orderBy('companyMember.name', 'ASC')
+      .getMany();
 
-      const companyMembers = await companyMembersQuery
-        .orderBy('companyMember.name', 'ASC')
-        .getMany();
+    // If memberId was provided but no member found, return error
+    if (memberId && companyMembers.length === 0) {
+      return res.status(404).json({
+        success: false,
+        message: "Member not found in this company"
+      });
+    }
 
-      // If memberId was provided but no member found, return error
-      if (memberId && companyMembers.length === 0) {
-        return res.status(404).json({
-          success: false,
-          message: "Member not found in this company"
-        });
-      }
-
-      // Get event assignments for the date range to populate events for members
-      const eventAssignmentsQuery = eventAssignmentRepo.createQueryBuilder('eventAssignment')
-        .leftJoinAndSelect('eventAssignment.member', 'member')
-        .leftJoinAndSelect('eventAssignment.events', 'events')
-        .leftJoinAndSelect('eventAssignment.role', 'role')
-        .leftJoinAndSelect('events.project', 'project')
-        .leftJoinAndSelect('project.company', 'projectCompany') // Add project company relation
-        .where('events.date BETWEEN :startDate AND :endDate', { startDate, endDate })
-        .andWhere('member.id IN (:...memberIds)', {
-          memberIds: companyMembers.map(cm => cm.member.id)
-        });
-
-      const eventAssignments = await eventAssignmentsQuery
-        .orderBy('events.date', 'ASC')
-        .addOrderBy('events.startHour', 'ASC')
-        .getMany();
-
-      // Group event assignments by member ID for easy lookup
-      const assignmentsByMember = new Map();
-      eventAssignments.forEach(assignment => {
-        const memberId = assignment.member.id;
-        if (!assignmentsByMember.has(memberId)) {
-          assignmentsByMember.set(memberId, []);
-        }
-        assignmentsByMember.get(memberId).push(assignment);
+    // Get event assignments for the date range to populate events for members
+    const eventAssignmentsQuery = eventAssignmentRepo.createQueryBuilder('eventAssignment')
+      .leftJoinAndSelect('eventAssignment.member', 'member')
+      .leftJoinAndSelect('eventAssignment.events', 'events')
+      .leftJoinAndSelect('eventAssignment.role', 'role')
+      .leftJoinAndSelect('events.project', 'project')
+      .leftJoinAndSelect('project.company', 'projectCompany')
+      .where('events.date BETWEEN :startDate AND :endDate', { startDate, endDate })
+      .andWhere('member.id IN (:...memberIds)', {
+        memberIds: companyMembers.map(cm => cm.member.id)
       });
 
-      // Build the response with all company members, including those with no assignments
-      const membersResponse = companyMembers.map(companyMember => {
-        const member = companyMember.member;
-        const isInvited = !member.passwordHash || member.passwordHash === '';
+    const eventAssignments = await eventAssignmentsQuery
+      .orderBy('events.date', 'ASC')
+      .addOrderBy('events.startHour', 'ASC')
+      .getMany();
 
-        // Get events for this member from the assignments
-        const memberAssignments = assignmentsByMember.get(member.id) || [];
-        const events = memberAssignments.map(eventAssignment => ({
+    // Group event assignments by member ID for easy lookup
+    const assignmentsByMember = new Map();
+    eventAssignments.forEach(assignment => {
+      const memberId = assignment.member.id;
+      if (!assignmentsByMember.has(memberId)) {
+        assignmentsByMember.set(memberId, []);
+      }
+      assignmentsByMember.get(memberId).push(assignment);
+    });
+
+    // ============ GOOGLE CALENDAR EVENTS FETCHING ============
+
+      // Fetch Google Calendar events for all members in parallel
+      const googleCalendarPromises = companyMembers.map(async (companyMember) => {
+        try {
+          const member = companyMember.member;
+
+          // Check if member has active Google tokens
+          const hasActiveToken = member.googleTokens?.some(token => token.isActive);
+
+          if (!hasActiveToken) {
+            return { memberId: member.id, events: [] };
+          }
+
+          // Convert date range for Google Calendar API (ISO format with time)
+          const timeMin = new Date(startDate + 'T00:00:00').toISOString();
+          const timeMax = new Date(endDate + 'T23:59:59.999Z').toISOString();
+
+          // Get authenticated client using your existing service
+          const authClient = await GoogleCalendarService.getAuthenticatedClient(member.id);
+          const calendarClient = calendar({ version: 'v3', auth: authClient });
+
+          // Fetch events from Google Calendar
+          const response = await calendarClient.events.list({
+            calendarId: 'primary',
+            timeMin: timeMin,
+            timeMax: timeMax,
+            singleEvents: true,
+            orderBy: 'startTime',
+            maxResults: 250 // Adjust based on your needs
+          });
+
+          const googleEvents = response.data.items || [];
+
+          // FILTER: Exclude events that came from our system
+          const filteredGoogleEvents = googleEvents.filter(event => {
+            // Option 1: Check if it has our system's extended properties
+            const isFromOurSystem = event.extendedProperties?.private?.source === 'Weddex-Sync';
+
+
+
+            // Option 3: Check description/summary for our keywords
+            const description = event.description || '';
+            const summary = event.summary || '';
+            const hasOurKeywords = ['Weddex', 'Event synced from', 'Project:', 'Client:'].some(keyword =>
+              description.includes(keyword) || summary.includes(keyword)
+            );
+
+            // Skip if any of these conditions are true
+            if (isFromOurSystem || hasOurKeywords) {
+              console.log(`Skipping Google Calendar event ${event.id} - from our system`);
+              return false;
+            }
+
+            return true;
+          });
+
+          console.log(`Member ${member.id}: Found ${googleEvents.length} Google events, filtered to ${filteredGoogleEvents.length} external events`);
+
+          // Format Google Calendar events to match your structure
+          const formattedEvents = filteredGoogleEvents.map(event => {
+            // Extract date and hours from Google Calendar event
+            const isAllDay = !event.start?.dateTime;
+            const eventStart = event.start?.dateTime ? new Date(event.start.dateTime) :
+              (event.start?.date ? new Date(event.start.date) : new Date(startDate));
+            const eventEnd = event.end?.dateTime ? new Date(event.end.dateTime) :
+              (event.end?.date ? new Date(event.end.date) : new Date(startDate));
+
+            // For all-day events, Google uses date-only format
+            // For multi-day events, we need to handle them as single events
+            const eventDate = isAllDay ?
+              (event.start?.date || startDate) :
+              eventStart.toISOString().split('T')[0];
+
+            // Calculate duration in days for multi-day events
+            const durationMs = eventEnd.getTime() - eventStart.getTime();
+            const durationDays = Math.ceil(durationMs / (1000 * 60 * 60 * 24));
+            const isMultiDay = durationDays > 1;
+
+            // ============ CORRECTED HOURLY CONVERSION LOGIC ============
+            let startHour = null;
+            let startMinute = null;
+            let endHour = null;
+            let endMinute = null;
+            let durationInHours = null;
+
+            if (!isAllDay) {
+              // Get exact hours and minutes
+              const exactStartHour = eventStart.getHours();
+              const exactStartMinute = eventStart.getMinutes();
+              const exactEndHour = eventEnd.getHours();
+              const exactEndMinute = eventEnd.getMinutes();
+
+              // Apply CORRECTED rounding rules:
+              // Start time: FLOOR (round down to current hour)
+              startHour = exactStartHour; // Always floor to current hour
+              startMinute = 0;
+
+              // End time: CEILING (round up to next hour if there are minutes)
+              endHour = exactEndMinute > 0 ? exactEndHour + 1 : exactEndHour;
+              endMinute = 0;
+
+              // Edge case: if endHour rounds up to 24, handle it
+              if (endHour >= 24) {
+                endHour = 23;
+                endMinute = 59;
+
+                // If this makes endHour < startHour, adjust
+                if (endHour < startHour && eventDate === eventEnd.toISOString().split('T')[0]) {
+                  endHour = 23;
+                }
+              }
+
+              // Calculate duration in hours (using rounded hours)
+              if (eventDate === eventEnd.toISOString().split('T')[0]) {
+                // Same day event
+                durationInHours = Math.max(1, endHour - startHour);
+              } else {
+                // Multi-day event - calculate total hours across days
+                // For first day: 24 - startHour
+                // For full days in between: 24 * (full days)
+                // For last day: endHour
+                const firstDayHours = 24 - startHour;
+                const lastDayHours = endHour;
+                const fullDaysBetween = durationDays - 2; // Excluding first and last day
+                const middleDaysHours = fullDaysBetween > 0 ? fullDaysBetween * 24 : 0;
+
+                durationInHours = firstDayHours + middleDaysHours + lastDayHours;
+              }
+
+              // Special case: If event duration after rounding is 0, make it at least 1 hour
+              if (durationInHours < 1) {
+                durationInHours = 1;
+                if (endHour === startHour) {
+                  endHour = startHour + 1;
+                }
+              }
+            }
+            // ============ END CORRECTED HOURLY CONVERSION ============
+
+            return {
+              id: event.id,
+              name: event.summary || 'No Title',
+              date: eventDate, // Start date
+              endDate: isMultiDay ? eventEnd.toISOString().split('T')[0] : null, // End date for multi-day events
+              startHour: startHour, // FLOORED to current hour
+              startMinute: startMinute, // Always 0
+              endHour: endHour, // CEILING to next hour
+              endMinute: endMinute, // Always 0
+              location: event.location || '',
+              isGoogleCalendarEvent: true, // Flag to identify Google Calendar events
+              source: 'google_calendar',
+              htmlLink: event.htmlLink,
+              description: event.description || '',
+              allDay: isAllDay,
+              multiDay: isMultiDay, // Flag to indicate multi-day event
+              durationDays: isMultiDay ? durationDays : null,
+              durationHours: durationInHours, // Added for clarity
+              originalStartTime: !isAllDay ? eventStart.toISOString() : null, // Keep original for reference
+              originalEndTime: !isAllDay ? eventEnd.toISOString() : null, // Keep original for reference
+              roundedStartTime: startHour !== null ? `${startHour.toString().padStart(2, '0')}:00` : null,
+              roundedEndTime: endHour !== null ? `${endHour.toString().padStart(2, '0')}:00` : null,
+              organizer: event.organizer?.email,
+              attendees: event.attendees?.map((a: any) => ({
+                email: a.email,
+                displayName: a.displayName,
+                responseStatus: a.responseStatus
+              })) || [],
+              // Add extended properties if available
+              extendedProperties: event.extendedProperties,
+              // These won't exist for Google Calendar events
+              project: null,
+              assignment: null,
+              reminders: null,
+              isOther: false
+            };
+          });
+
+          return { memberId: member.id, events: formattedEvents };
+
+        } catch (error) {
+          console.error(`Error fetching Google Calendar events for member ${companyMember.member.id}:`, error);
+
+          // Handle specific Google Calendar errors
+          if (error.code === 401 || error.message?.includes('invalid_grant')) {
+            console.log(`Google authentication expired for member ${companyMember.member.id}`);
+            // Optionally mark the token as inactive
+            if (companyMember.member.googleTokens) {
+              companyMember.member.googleTokens.forEach(token => {
+                if (token.isActive) token.isActive = false;
+              });
+            }
+          }
+
+          return { memberId: companyMember.member.id, events: [] };
+        }
+      });
+
+      // Wait for all Google Calendar requests to complete
+      const googleCalendarResults = await Promise.allSettled(googleCalendarPromises);
+
+      // Create a map of Google Calendar events by member ID
+      const googleEventsByMember = new Map();
+      googleCalendarResults.forEach(result => {
+        if (result.status === 'fulfilled') {
+          googleEventsByMember.set(result.value.memberId, result.value.events);
+        }
+      });
+    // ============ END GOOGLE CALENDAR FETCHING ============
+
+    // Build the response with all company members, including those with no assignments
+    const membersResponse = companyMembers.map(companyMember => {
+      const member = companyMember.member;
+      const isInvited = !member.passwordHash || member.passwordHash === '';
+
+      // Get project events for this member from the assignments
+      const memberAssignments = assignmentsByMember.get(member.id) || [];
+      const projectEvents = memberAssignments.map(eventAssignment => ({
           eventId: eventAssignment.events.id,
           name: eventAssignment.events.name,
           date: eventAssignment.events.date,
@@ -742,7 +967,9 @@ class MemberController {
           endHour: eventAssignment.events.endHour,
           location: eventAssignment.events.location,
           reminders: eventAssignment.events.reminders,
-          isOther: eventAssignment.events.project.company?.id !== companyId, // Add isOther field
+          isOther: eventAssignment.events.project.company?.id !== companyId,
+          isGoogleCalendarEvent: false, // Explicitly mark as not Google Calendar
+          source: 'project',
           project: {
             id: eventAssignment.events.project.id,
             name: eventAssignment.events.project.name,
@@ -751,7 +978,6 @@ class MemberController {
             client: eventAssignment.events.project.client,
             brief: eventAssignment.events.project.brief,
             logistics: eventAssignment.events.project.logistics,
-            // Optionally include company info if needed
             company: eventAssignment.events.project.company ? {
               id: eventAssignment.events.project.company.id,
               name: eventAssignment.events.project.company.name
@@ -764,83 +990,133 @@ class MemberController {
             instructions: eventAssignment.instructions,
             googleEventId: eventAssignment.googleEventId
           }
-        }));
+      }));
 
-        return {
-          id: member.id,
-          name: companyMember.name,
-          email: member.email,
-          role: companyMember.role?.name || 'No Role Assigned',
-          roleId: companyMember.role?.id || "",
-          phone: companyMember.phone || '',
-          location: companyMember.location || '',
-          bio: companyMember.bio || '',
-          profilePhoto: companyMember.profilePhoto || '',
-          ringColor: companyMember.ringColor || '',
-          active: companyMember.active,
-          isAdmin: companyMember.isAdmin,
-          skills: companyMember.skills || [],
-          companyId: companyId,
-          companyMemberId: companyMember.id,
-          isInvited: isInvited,
-          isOwner: company.email === member.email,
-          invitation: companyMember.invitation,
-          events: events
-        };
-      });
+      // Get Google Calendar events for this member
+      const googleCalendarEvents = googleEventsByMember.get(member.id) || [];
 
-      // Sort members: admins first, then by name
-      let sortedMembersResponse = [...membersResponse].sort((a, b) => {
+      // Check if member has active Google Calendar connection
+      const hasGoogleCalendar = member.googleTokens?.some(token => token.isActive) || false;
+
+      return {
+        id: member.id,
+        name: companyMember.name,
+        email: member.email,
+        role: companyMember.role?.name || 'No Role Assigned',
+        roleId: companyMember.role?.id || "",
+        phone: companyMember.phone || '',
+        location: companyMember.location || '',
+        bio: companyMember.bio || '',
+        profilePhoto: companyMember.profilePhoto || '',
+        ringColor: companyMember.ringColor || '',
+        active: companyMember.active,
+        isAdmin: companyMember.isAdmin,
+        skills: companyMember.skills || [],
+        companyId: companyId,
+        companyMemberId: companyMember.id,
+        isInvited: isInvited,
+        isOwner: company.email === member.email,
+        invitation: companyMember.invitation,
+        events: projectEvents,
+        googleCalendarEvents: googleCalendarEvents,
+        hasGoogleCalendar: hasGoogleCalendar,
+        totalEvents: projectEvents.length + googleCalendarEvents.length
+      };
+    });
+
+    // Sort members: admins first, then by name
+    let sortedMembersResponse = [...membersResponse].sort((a, b) => {
+      if (a.isAdmin && !b.isAdmin) return -1;
+      if (!a.isAdmin && b.isAdmin) return 1;
+      return a.name.localeCompare(b.name);
+    });
+
+    // If memberId is provided, sort to put that member first
+    if (memberId) {
+      sortedMembersResponse = sortedMembersResponse.sort((a, b) => {
+        if (a.id === memberId) return -1;
+        if (b.id === memberId) return 1;
         if (a.isAdmin && !b.isAdmin) return -1;
         if (!a.isAdmin && b.isAdmin) return 1;
         return a.name.localeCompare(b.name);
       });
-
-      // If memberId is provided, sort to put that member first
-      if (memberId) {
-        sortedMembersResponse = sortedMembersResponse.sort((a, b) => {
-          if (a.id === memberId) return -1;
-          if (b.id === memberId) return 1;
-          if (a.isAdmin && !b.isAdmin) return -1;
-          if (!a.isAdmin && b.isAdmin) return 1;
-          return a.name.localeCompare(b.name);
-        });
-      }
-
-      // Calculate summary statistics for other company events
-      // const totalEvents = sortedMembersResponse.reduce((sum, member) => sum + member.events.length, 0);
-      // const otherCompanyEvents = sortedMembersResponse.reduce((sum, member) =>
-      //   sum + member.events.filter((event: any) => event.isOther).length, 0
-      // );
-
-      // Prepare response metadata
-      const responseMetadata = viewType === 'month'
-        ? { month, year }
-        : { week, year };
-
-      return res.status(200).json({
-        success: true,
-        message: memberId
-          ? `Member details retrieved successfully for ${viewType} view`
-          : `Members retrieved successfully for ${viewType} view`,
-        members: sortedMembersResponse,
-        totalCount: sortedMembersResponse.length,
-        viewType,
-        ...responseMetadata,
-        dateRange: {
-          startDate,
-          endDate
-        }
-      });
-
-    } catch (err) {
-      console.error("Error fetching members:", err);
-      return res.status(500).json({
-        success: false,
-        message: "Server error while fetching members"
-      });
     }
-  };
+
+    // Calculate summary statistics
+    const totalProjectEvents = sortedMembersResponse.reduce((sum, member) => sum + member.events.length, 0);
+    const totalGoogleEvents = sortedMembersResponse.reduce((sum, member) => sum + member.googleCalendarEvents.length, 0);
+    const totalEvents = totalProjectEvents + totalGoogleEvents;
+
+    // Prepare response metadata
+    const responseMetadata = viewType === 'month'
+      ? { month, year }
+      : { week, year };
+
+    return res.status(200).json({
+      success: true,
+      message: memberId
+        ? `Member details retrieved successfully for ${viewType} view`
+        : `Members retrieved successfully for ${viewType} view`,
+      members: sortedMembersResponse,
+      totalCount: sortedMembersResponse.length,
+      totalProjectEvents,
+      totalGoogleEvents,
+      totalEvents,
+      viewType,
+      ...responseMetadata,
+      dateRange: {
+        startDate,
+        endDate
+      },
+      lockedDates: allLockedDates
+    });
+
+  } catch (err) {
+    console.error("Error fetching members:", err);
+    return res.status(500).json({
+      success: false,
+      message: "Server error while fetching members"
+    });
+  }
+};
+
+  // Helper function to check if two date ranges overlap
+  private datesOverlap(start1: Date, end1: Date | null, start2: Date, end2: Date): boolean {
+    if (!start1 || !start2) return false;
+
+    // If event has no end date, treat it as single day at start date
+    const actualEnd1 = end1 || new Date(start1);
+    // Make sure end1 is at end of day if it's the same as start1
+    if (actualEnd1.getTime() === start1.getTime()) {
+      actualEnd1.setHours(23, 59, 59, 999);
+    }
+
+    console.log(`  Overlap check:`);
+    console.log(`    Range 1: ${start1.toISOString()} to ${actualEnd1.toISOString()}`);
+    console.log(`    Range 2: ${start2.toISOString()} to ${end2.toISOString()}`);
+
+    // Check for overlap: (StartA <= EndB) and (EndA >= StartB)
+    const overlaps = start1 <= end2 && actualEnd1 >= start2;
+    console.log(`    Result: ${overlaps}`);
+
+    return overlaps;
+  }
+
+  private formatDate(date: Date): string {
+    const year = date.getFullYear();
+    const month = String(date.getMonth() + 1).padStart(2, '0');
+    const day = String(date.getDate()).padStart(2, '0');
+    return `${year}-${month}-${day}`;
+  }
+
+  private getDateFromWeek(year: number, week: number): Date {
+    // Simple implementation - adjust as needed
+    const date = new Date(year, 0, 1 + (week - 1) * 7);
+    const dayOfWeek = date.getDay();
+    date.setDate(date.getDate() - dayOfWeek + 1); // Start on Monday
+    return date;
+  }
+
 
   public getMembersWithCurrentFutureProjects = async (
     req: Request<{}, {}, IGetMembersWithProjectsRequest>,
@@ -1020,28 +1296,6 @@ class MemberController {
     }
   };
 
-  // Helper function to get date from week number
-  private getDateFromWeek(year: number, week: number): Date {
-    const simple = new Date(year, 0, 1 + (week - 1) * 7);
-    const dayOfWeek = simple.getDay();
-    const isoWeekStart = simple;
-
-    if (dayOfWeek <= 4) {
-      isoWeekStart.setDate(simple.getDate() - simple.getDay() + 1);
-    } else {
-      isoWeekStart.setDate(simple.getDate() + 8 - simple.getDay());
-    }
-
-    return isoWeekStart;
-  }
-
-  // Helper function to format date as yyyy-mm-dd
-  private formatDate(date: Date): string {
-    const year = date.getFullYear();
-    const month = (date.getMonth() + 1).toString().padStart(2, '0');
-    const day = date.getDate().toString().padStart(2, '0');
-    return `${year}-${month}-${day}`;
-  }
 
   public updateMember = async (
     req: Request<{ id: string }, {}, IUpdateMemberRequest>,
@@ -1445,9 +1699,9 @@ class MemberController {
       }
 
       const isMatch = await bcrypt.compare(password, member.passwordHash || "");
-      // if (!isMatch) {
-      //   return res.status(401).json({ success: false, message: "Invalid credentials" });
-      // }
+      if (!isMatch) {
+        return res.status(401).json({ success: false, message: "Invalid credentials" });
+      }
 
       const activeCompanyMembers = member.companyMembers.filter(
         cm => cm.invitation == 'accepted'
@@ -1655,6 +1909,7 @@ class MemberController {
   ) => {
     try {
       const { companyId, eventDate, startHour, endHour, excludeEventId } = req.body;
+
       // Validation - if any required parameter is null, return all members
       if (
         !companyId ||
@@ -1684,6 +1939,7 @@ class MemberController {
           },
           relations: [
             "member",
+            "member.googleTokens", // ADD THIS: Load Google tokens
             "member.eventAssignments",
             "member.eventAssignments.role",
             "member.eventAssignments.events",
@@ -1729,6 +1985,12 @@ class MemberController {
                   }
                 }
               },
+              // ADD THIS: Include googleTokens in select
+              googleTokens: {
+                id: true,
+                isActive: true,
+                refreshToken: true
+              }
             },
           },
         });
@@ -1750,6 +2012,7 @@ class MemberController {
           companyMemberId: companyMember.id,
           availabilityStatus: "fully_available",
           conflicts: [],
+          hasGoogleCalendar: companyMember.member.googleTokens?.some(token => token.isActive) || false // Add this
         }));
 
         return res.status(200).json({
@@ -1819,6 +2082,7 @@ class MemberController {
         },
         relations: [
           "member",
+          "member.googleTokens", // ADD THIS: Load Google tokens
           "member.eventAssignments",
           "member.eventAssignments.role",
           "member.eventAssignments.events",
@@ -1864,19 +2128,125 @@ class MemberController {
                 }
               }
             },
+            // ADD THIS: Include googleTokens in select
+            googleTokens: {
+              id: true,
+              isActive: true,
+              refreshToken: true
+            }
           },
         },
       });
 
-      // Helper methods to check conflicts
+      // Helper method to check Google Calendar conflicts
+      const checkGoogleCalendarConflicts = async (member: Member, eventDate: string, startHour: number, endHour: number): Promise<any[]> => {
+        try {
+          // Check if member has active Google Calendar connection
+          const hasActiveToken = member.googleTokens?.some(token => token.isActive && token.refreshToken);
+
+          if (!hasActiveToken) {
+            return []; // No Google Calendar connection
+          }
+
+          // Convert date/time to Google Calendar API format
+          const eventDateTime = new Date(eventDate);
+
+          // Create timeMin and timeMax for the exact hours requested
+          const timeMin = new Date(eventDateTime);
+          timeMin.setHours(startHour, 0, 0, 0);
+
+          const timeMax = new Date(eventDateTime);
+          timeMax.setHours(endHour, 0, 0, 0);
+
+          // Get Google Calendar events for this member
+          const authClient = await GoogleCalendarService.getAuthenticatedClient(member.id);
+          const calendarClient = calendar({ version: 'v3', auth: authClient });
+
+          const response = await calendarClient.events.list({
+            calendarId: 'primary',
+            timeMin: timeMin.toISOString(),
+            timeMax: timeMax.toISOString(),
+            singleEvents: true,
+            orderBy: 'startTime',
+            maxResults: 50
+          });
+
+          const googleEvents = response.data.items || [];
+
+          // Filter out events from our own system
+          const externalEvents = googleEvents.filter(event => {
+            // Skip if it's from our system
+            const isFromOurSystem = event.extendedProperties?.private?.source === 'Weddex-Sync';
+            const hasOurKeywords = ['Weddex', 'Event synced from'].some(keyword =>
+              (event.description || '').includes(keyword) || (event.summary || '').includes(keyword)
+            );
+            return !(isFromOurSystem || hasOurKeywords);
+          });
+
+          // Convert Google Calendar events to conflicts
+          const conflicts: any[] = [];
+
+          externalEvents.forEach(event => {
+            const isAllDay = !event.start?.dateTime;
+
+            if (isAllDay) {
+              // All-day event conflicts with entire day
+              conflicts.push({
+                projectId: null,
+                projectName: "Google Calendar",
+                eventDate: eventDate,
+                startHour: 0,
+                endHour: 24,
+                conflictType: "google_calendar_all_day",
+                eventId: event.id,
+                eventName: event.summary || "Google Calendar Event",
+                source: "google_calendar",
+                description: "All-day event in Google Calendar"
+              });
+            } else {
+              // Timed event - check if it overlaps with requested hours
+              const eventStart = new Date(event.start.dateTime);
+              const eventEnd = new Date(event.end.dateTime);
+
+              const eventStartHour = eventStart.getHours();
+              const eventEndHour = eventEnd.getHours();
+
+              // Check if Google Calendar event overlaps with requested time
+              const hasTimeOverlap = !(endHour <= eventStartHour || startHour >= eventEndHour);
+
+              if (hasTimeOverlap) {
+                conflicts.push({
+                  projectId: null,
+                  projectName: "Google Calendar",
+                  eventDate: eventDate,
+                  startHour: eventStartHour,
+                  endHour: eventEndHour,
+                  conflictType: "google_calendar_time",
+                  eventId: event.id,
+                  eventName: event.summary || "Google Calendar Event",
+                  source: "google_calendar",
+                  location: event.location || "",
+                  description: event.description || "Busy in Google Calendar"
+                });
+              }
+            }
+          });
+
+          return conflicts;
+
+        } catch (error) {
+          console.error(`Error checking Google Calendar for member ${member.id}:`, error);
+          return []; // Return empty array on error
+        }
+      };
+
+      // Helper methods to check conflicts (existing code)
       const hasDateConflict = (
         event: Events,
         requestedDate: string
       ): boolean => {
         const eventDateObj = new Date(event.date);
         const requestedDateObj = new Date(requestedDate);
-
-        // Check if the event date is the same as the requested date
         return eventDateObj.toDateString() === requestedDateObj.toDateString();
       };
 
@@ -1885,16 +2255,17 @@ class MemberController {
         startHour: number,
         endHour: number
       ): boolean => {
-        // Check if time intervals overlap
         return !(endHour <= event.startHour || startHour >= event.endHour);
       };
 
       const availableMembers: IAvailableMemberResponse[] = [];
 
+      // Process each member
       for (const companyMember of companyMembers) {
         const member = companyMember.member;
         const conflicts: any[] = [];
 
+        // 1. Check existing project event conflicts
         if (member.eventAssignments && member.eventAssignments.length > 0) {
           for (const assignment of member.eventAssignments) {
             const event = assignment.events;
@@ -1920,7 +2291,8 @@ class MemberController {
                   endHour: event.endHour,
                   conflictType: "date_and_time",
                   eventId: event.id,
-                  eventName: event.name
+                  eventName: event.name,
+                  source: "project"
                 });
               } else {
                 conflicts.push({
@@ -1931,39 +2303,55 @@ class MemberController {
                   endHour: event.endHour,
                   conflictType: "date_only",
                   eventId: event.id,
-                  eventName: event.name
+                  eventName: event.name,
+                  source: "project"
                 });
               }
             }
           }
         }
 
-        const fullConflicts = conflicts.filter(
-          (c) => c.conflictType === "date_and_time"
+        // 2. Check Google Calendar conflicts (only if we have date/time parameters)
+        const googleConflicts = await checkGoogleCalendarConflicts(member, eventDate, startHour, endHour);
+        conflicts.push(...googleConflicts);
+
+        // 3. Determine availability status
+        const projectTimeConflicts = conflicts.filter(
+          (c) => c.conflictType === "date_and_time" && c.source === "project"
         );
+
+        const googleTimeConflicts = conflicts.filter(
+          (c) => c.source === "google_calendar" &&
+            (c.conflictType === "google_calendar_time" || c.conflictType === "google_calendar_all_day")
+        );
+
         const dateOnlyConflicts = conflicts.filter(
           (c) => c.conflictType === "date_only"
         );
 
-        if (conflicts.length === 0) {
+        // Combine all time conflicts (project + Google Calendar)
+        const allTimeConflicts = [...projectTimeConflicts, ...googleTimeConflicts];
+
+        if (allTimeConflicts.length === 0 && dateOnlyConflicts.length === 0) {
           availableMembers.push({
             id: member.id,
             profilePhoto: companyMember.profilePhoto,
             name: companyMember.name,
             email: member.email,
-            role: companyMember.role?.name || "", // Get role from CompanyMember
-            roleId: companyMember.role?.id || "", // Include roleId
+            role: companyMember.role?.name || "",
+            roleId: companyMember.role?.id || "",
             phone: companyMember.phone || "",
             location: companyMember.location || "",
             bio: companyMember.bio || "",
             skills: companyMember.skills || [],
-            ringColor: companyMember.ringColor || "", // Include ringColor from CompanyMember
-            isAdmin: companyMember.isAdmin, // Include admin status
-            companyMemberId: companyMember.id, // Include junction table ID
+            ringColor: companyMember.ringColor || "",
+            isAdmin: companyMember.isAdmin,
+            companyMemberId: companyMember.id,
             availabilityStatus: "fully_available",
             conflicts: [],
+            hasGoogleCalendar: member.googleTokens?.some(token => token.isActive) || false
           });
-        } else if (fullConflicts.length === 0 && dateOnlyConflicts.length > 0) {
+        } else if (allTimeConflicts.length === 0 && dateOnlyConflicts.length > 0) {
           availableMembers.push({
             id: member.id,
             profilePhoto: companyMember.profilePhoto,
@@ -1980,6 +2368,7 @@ class MemberController {
             companyMemberId: companyMember.id,
             availabilityStatus: "partially_available",
             conflicts: dateOnlyConflicts,
+            hasGoogleCalendar: member.googleTokens?.some(token => token.isActive) || false
           });
         } else {
           availableMembers.push({
@@ -1997,7 +2386,8 @@ class MemberController {
             isAdmin: companyMember.isAdmin,
             companyMemberId: companyMember.id,
             availabilityStatus: "unavailable",
-            conflicts: fullConflicts,
+            conflicts: allTimeConflicts,
+            hasGoogleCalendar: member.googleTokens?.some(token => token.isActive) || false
           });
         }
       }

@@ -21,18 +21,18 @@ export interface ForgotPasswordTemplateData {
   subject: string;
 }
 
-export interface ProjectReminderTemplateData {
+interface EventReminderTemplateData {
   memberName: string;
+  eventName: string;
   projectName: string;
-  projectDescription: string;
-  startDate: string;
-  startHour: number;
-  endHour: number;
+  eventDate: string;
+  startHour: string;
+  endHour: string;
   location: string;
   companyName: string;
   reminderType: 'weekBefore' | 'dayBefore';
-  daysUntilStart: number;
-  subject: string;
+  daysUntilEvent: number;
+  subject?: string;
 }
 export class EmailRenderer {
   private templateDir: string;
@@ -87,16 +87,16 @@ async renderNewMemberEmail(data: Omit<EmailTemplateData, 'subject'> & {
     };
   }
 
-  async renderProjectReminderEmail(data: Omit<ProjectReminderTemplateData, 'subject'>): Promise<{ subject: string; html: string }> {
+  async renderEventReminderEmail(data: Omit<EventReminderTemplateData, 'subject'>): Promise<{ subject: string; html: string }> {
+    const dayLabel = data.daysUntilEvent === 1 ? 'day' : 'days';
     const reminderText = data.reminderType === 'weekBefore' ? '1 week' : '1 day';
-    const dayLabel = data.daysUntilStart === 1 ? 'day' : 'days';
 
-    const completeData: ProjectReminderTemplateData = {
+    const completeData: EventReminderTemplateData = {
       ...data,
-      subject: `Reminder: ${data.projectName} starts in ${data.daysUntilStart} ${dayLabel}`
+      subject: `Reminder: ${data.eventName} (${data.projectName}) in ${data.daysUntilEvent} ${dayLabel}`
     };
 
-    const html = await this.renderTemplate('project-reminder', completeData);
+    const html = await this.renderTemplate('event-reminder', completeData);
 
     return {
       subject: completeData.subject,

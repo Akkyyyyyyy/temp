@@ -21,3 +21,15 @@ export function generatePassword(length = 6) {
     .sort(() => Math.random() - 0.5)
     .join("");
 }
+export function formatTime(hour: string | number): string {
+  const h =
+    typeof hour === 'string'
+      ? parseInt(hour.split(':')[0], 10)
+      : hour;
+
+  if (h === 0 || h === 24) return '12 AM';
+  if (h === 12) return '12 PM';
+  if (h > 12) return `${h - 12} PM`;
+  return `${h} AM`;
+}
+

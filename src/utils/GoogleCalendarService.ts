@@ -72,12 +72,15 @@ export class GoogleCalendarService {
   }
 
   // Get authenticated OAuth2Client with valid credentials
-  private async getAuthenticatedClient(memberId: string): Promise<OAuth2Client> {
+  public async getAuthenticatedClient(memberId: string): Promise<OAuth2Client> {
     try {
       console.log("🔑 Getting authenticated client for member:", memberId);
 
-      // Get active token
-      const activeToken = await googleTokenRepo.findOne({
+      // Import necessary TypeORM decorators if not already imported
+      // import { Not, IsNull } from 'typeorm';
+
+      // First try to get active token
+      let token = await googleTokenRepo.findOne({
         where: {
           member: { id: memberId },
           isActive: true,
@@ -85,11 +88,29 @@ export class GoogleCalendarService {
         relations: ['member']
       });
 
-      if (!activeToken) {
-        throw new Error('No active Google token found. Please connect Google Calendar first.');
+      // If no active token, check for ANY token with refresh token
+      if (!token) {
+        console.log("⚠️ No active token found, checking for any token with refresh token...");
+        token = await googleTokenRepo.findOne({
+          where: {
+            member: { id: memberId },
+            refreshToken: Not(IsNull()) // Has refresh token
+          },
+          relations: ['member']
+        });
+
+        if (token) {
+          console.log("🔄 Found inactive token with refresh token, activating it...");
+          token.isActive = true;
+          await googleTokenRepo.save(token);
+        }
       }
 
-      if (!activeToken.refreshToken) {
+      if (!token) {
+        throw new Error('No Google token found. Please connect Google Calendar first.');
+      }
+
+      if (!token.refreshToken) {
         throw new Error('No refresh token available. Please reconnect Google Calendar.');
       }
 
@@ -102,7 +123,7 @@ export class GoogleCalendarService {
 
       // Set the refresh token as credentials
       oauth2Client.setCredentials({
-        refresh_token: activeToken.refreshToken
+        refresh_token: token.refreshToken
       });
 
       // Get access token (this will refresh if needed)
@@ -113,43 +134,49 @@ export class GoogleCalendarService {
       }
 
       // Update token in database
-      activeToken.accessToken = credentials.access_token;
-      activeToken.expiryDate = new Date(Date.now() + (credentials.expiry_date || 3600 * 1000));
-      activeToken.tokenType = credentials.token_type || 'Bearer';
+      token.accessToken = credentials.access_token;
+      token.expiryDate = new Date(Date.now() + (credentials.expiry_date || 3600 * 1000));
+      token.tokenType = credentials.token_type || 'Bearer';
 
       if (credentials.refresh_token) {
-        activeToken.refreshToken = credentials.refresh_token;
+        token.refreshToken = credentials.refresh_token;
       }
 
-      await googleTokenRepo.save(activeToken);
+      await googleTokenRepo.save(token);
 
       // Set the access token for immediate use
       oauth2Client.setCredentials({
         access_token: credentials.access_token,
-        refresh_token: activeToken.refreshToken,
+        refresh_token: token.refreshToken,
         expiry_date: credentials.expiry_date,
         token_type: credentials.token_type,
         scope: credentials.scope
       });
 
+      console.log("✅ Successfully authenticated client");
       return oauth2Client;
 
     } catch (error: any) {
       console.error('❌ Error getting authenticated client:', error);
 
-      // Mark token as inactive if refresh failed
-      if (error.message.includes('invalid_grant') || error.code === 400) {
+      // Mark any token as inactive if refresh failed
+      if (error.message?.includes('invalid_grant') ||
+        error.code === 400 ||
+        error.response?.data?.error === 'invalid_grant') {
+
+        console.log("🔒 Invalid grant - deactivating token");
         await googleTokenRepo.update(
-          { member: { id: memberId }, isActive: true },
+          { member: { id: memberId } },
           { isActive: false }
         );
+
         throw new Error('Google authentication expired. Please reconnect Google Calendar.');
       }
 
+      // Re-throw other errors
       throw error;
     }
   }
-
   // Get valid access token (for backward compatibility)
   async getValidAccessToken(memberId: string): Promise<string> {
     try {
@@ -516,30 +543,34 @@ export class GoogleCalendarService {
     try {
       console.log("🔍 Checking Google auth for member:", memberId);
 
-      // Find any active token
-      const activeToken = await googleTokenRepo.findOne({
+      // Check for ANY token with refresh token
+      const token = await googleTokenRepo.findOne({
         where: {
           member: { id: memberId },
-          isActive: true,
+          refreshToken: Not(IsNull()) // Has refresh token
         }
       });
 
-      if (!activeToken) {
-        console.log("❌ No active token found");
+      if (!token) {
+        console.log("❌ No token with refresh token found");
         return false;
       }
 
-      if (!activeToken.refreshToken) {
-        console.log("❌ No refresh token available");
-        return false;
-      }
-
-      // Check if we can get an authenticated client (this will validate the token)
+      // Try to get authenticated client
       try {
         await this.getAuthenticatedClient(memberId);
         return true;
       } catch (error) {
         console.error("❌ Failed to authenticate:", error);
+
+        // Check if it's a recoverable auth error
+        if (error.message?.includes('invalid_grant') ||
+          error.message?.includes('token expired') ||
+          error.message?.includes('Google authentication expired')) {
+          console.log("⚠️ Auth exists but needs reconnection");
+          return false; // User needs to reconnect
+        }
+
         return false;
       }
 
