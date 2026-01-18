@@ -30,6 +30,7 @@ import { CompanyMember } from "../../entity/CompanyMember";
 import { In, QueryRunner, Repository } from "typeorm";
 import { Events } from "../../entity/Events";
 import { EventAssignment } from "../../entity/EventAssignment";
+import { sendProjectEventsAssignmentEmail } from "../../utils/mailer";
 
 class ProjectController {
     public createProject = async (
@@ -1377,7 +1378,6 @@ class ProjectController {
 
         try {
             const { projectId, memberId, eventId } = req.body;
-
             // Validation
             if (!projectId?.trim()) {
                 return res.status(400).json({
@@ -1425,6 +1425,11 @@ class ProjectController {
                     project: { id: projectId }
                 }
             });
+            console.log("memberId",memberId);
+            console.log("eventId",eventId);
+            console.log("projectId",projectId);
+
+            
 
             if (!event) {
                 return res.status(404).json({
@@ -1716,6 +1721,44 @@ class ProjectController {
             });
         }
     };
+
+    private async sendConsolidatedEventAssignmentEmails(
+        memberAssignments: Map<string, {
+            member: any,
+            events: Array<{
+                eventName: string;
+                eventDate: string;
+                startHour: string;
+                endHour: string;
+                location: string;
+            }>,
+            companyMember: any
+        }>,
+        projectName: string,
+        companyName: string
+    ) {
+        let totalEmailsSent = 0;
+
+        for (const [memberId, assignment] of memberAssignments.entries()) {
+            try {
+                await sendProjectEventsAssignmentEmail(
+                    assignment.member.email,
+                    assignment.companyMember?.name || 'Team Member',
+                    projectName,
+                    assignment.events,
+                    companyName
+                );
+
+                totalEmailsSent++;
+                console.log(`   ✅ Sent consolidated event assignment email to ${assignment.member.email} with ${assignment.events.length} event(s)`);
+            } catch (emailError) {
+                console.error(`     ❌ Failed to send email to ${assignment.member.email}:`, emailError.message || emailError);
+            }
+        }
+
+        return totalEmailsSent;
+    }
+
 }
 
 export default new ProjectController();

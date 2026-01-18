@@ -29,7 +29,7 @@ class PackageController {
       } = req.body;
 
       // Validate required fields
-      if (!name || !price || !duration || !status || !companyId) {
+      if (!name || !price || !status || !companyId) {
         res.status(400).json({ message: "All required fields must be provided" });
         return;
       }

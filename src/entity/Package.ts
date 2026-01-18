@@ -36,7 +36,7 @@ export class Package implements IPackage {
   @Column("decimal", { scale: 2 })
   price: number;
 
-  @Column()
+  @Column({nullable: true })
   duration: string;
 
   @Column({ default: false })

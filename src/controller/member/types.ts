@@ -103,6 +103,13 @@ export interface IGetAvailableMembersRequest {
   excludeEventId?: string; // Changed from excludeProjectId
 }
 
+export interface IGetAvailableMembersByDateRangeRequest {
+  companyId: string;
+  startDate: string;
+  endDate?: string; 
+  excludeEventId?: string; 
+}
+
 export interface IConflict {
   projectId: string;
   projectName: string;

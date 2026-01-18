@@ -30,21 +30,8 @@ const authMiddleware = (req: Request, res: Response, next: NextFunction) => {
     res.locals.token = decodedToken;
     next();
   } catch (error) {
-     if (error instanceof jwt.JsonWebTokenError) {
-      return res.status(498).json({
-        message: "Token expired",
-      });
-    }
-    
-    if (error instanceof jwt.TokenExpiredError) {
-      return res.status(498).json({
-        message: "Token expired",
-      });
-    }
-
-    // Generic error for other cases
     console.error("JWT verification error:", error);
-    return res.status(403).json({
+    return res.status(401).json({
       message: "Authentication failed",
     });
   }

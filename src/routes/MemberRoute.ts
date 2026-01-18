@@ -16,12 +16,14 @@ memberRouter.post('/available', authMiddleware, MemberController.getAvailableMem
 memberRouter.put("/update/:id", authMiddleware, MemberController.updateMember);
 memberRouter.put("/update/:id", authMiddleware, formUpload.single('photo'), MemberController.updateMember);
 memberRouter.post("/upload-photo", authMiddleware, upload.single('photo'), createUploadMiddleware('photo', 'images'), MemberController.uploadProfilePhoto);
-memberRouter.delete('/remove-photo/:id',authMiddleware, MemberController.removeProfilePhoto);
+memberRouter.delete('/remove-photo/:id', authMiddleware, MemberController.removeProfilePhoto);
 memberRouter.post("/login", MemberController.memberLogin);
-memberRouter.delete("/delete/:id",authMiddleware, MemberController.deleteMember);
+memberRouter.delete("/delete/:id", authMiddleware, MemberController.deleteMember);
 memberRouter.delete("/company/:companyId/remove/:memberId", authMiddleware, MemberController.removeMemberFromCompany);
-memberRouter.patch('/:id/ring-color',authMiddleware,MemberController.updateRingColor);
-memberRouter.patch("/:id/toggle-status",authMiddleware, MemberController.toggleMemberStatus);
-memberRouter.post('/toggle-admin',authMiddleware, MemberController.toggleAdmin);
+memberRouter.patch('/:id/ring-color', authMiddleware, MemberController.updateRingColor);
+memberRouter.patch("/:id/toggle-status", authMiddleware, MemberController.toggleMemberStatus);
+memberRouter.post('/toggle-admin', authMiddleware, MemberController.toggleAdmin);
+memberRouter.post('/me', MemberController.getMe);
+memberRouter.post('/available-by-date', MemberController.getAvailableMembersByDateRange);
 
 export default memberRouter;

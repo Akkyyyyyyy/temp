@@ -618,6 +618,62 @@ class CompanyController {
             });
         }
     };
+    public getFutureLockedDates = async (req: Request, res: Response) => {
+        try {
+            const { companyId } = req.params;
+
+            if (!companyId) {
+                return res.status(400).json({
+                    success: false,
+                    message: "Company ID is required"
+                });
+            }
+
+            const companyRepository = AppDataSource.getRepository(Company);
+            const company = await companyRepository.findOneBy({ id: companyId });
+
+            if (!company) {
+                return res.status(404).json({
+                    success: false,
+                    message: "Company not found"
+                });
+            }
+
+            const lockedDates = company.lockedDates || [];
+
+            // Get current date (start of today)
+            const currentDate = new Date();
+            currentDate.setHours(0, 0, 0, 0);
+
+            // Filter future dates (including today if it's locked)
+            const futureLockedDates = lockedDates.filter(dateStr => {
+                const date = new Date(dateStr);
+                date.setHours(0, 0, 0, 0);
+                return date >= currentDate;
+            });
+
+            // Sort dates chronologically
+            futureLockedDates.sort((a, b) => new Date(a).getTime() - new Date(b).getTime());
+
+            return res.status(200).json({
+                success: true,
+                message: "Future locked dates retrieved successfully",
+                lockedDates: futureLockedDates,
+                totalLockedDates: futureLockedDates.length,
+                company: {
+                    id: company.id,
+                    name: company.name
+                }
+            });
+
+        } catch (err) {
+            console.error("Error fetching future locked dates:", err);
+            return res.status(500).json({
+                success: false,
+                message: "Server error while fetching locked dates"
+            });
+        }
+    };
 
 }
 

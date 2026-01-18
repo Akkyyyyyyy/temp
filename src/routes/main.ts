@@ -8,6 +8,7 @@ import packageRouter from "./PackageRoute";
 import roleRouter from "./RoleRoute";
 import eventRouter from "./EventRoute";
 import customReminderRouter from "./customReminderRoute";
+import geminiRouter from "./GeminiRoute";
 
 
 const mainRouter = express.Router();
@@ -21,6 +22,7 @@ mainRouter.use("/package", packageRouter);
 mainRouter.use("/roles", roleRouter);
 mainRouter.use("/event", eventRouter);
 mainRouter.use("/custom-reminders", customReminderRouter);
+mainRouter.use("/gemini", geminiRouter);
 
 
 export default mainRouter;

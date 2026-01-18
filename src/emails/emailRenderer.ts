@@ -103,6 +103,25 @@ async renderNewMemberEmail(data: Omit<EmailTemplateData, 'subject'> & {
       html
     };
   }
+  // In EmailRenderer class
+async renderProjectEventsAssignmentEmail(
+  data: Omit<any, 'subject'>
+): Promise<{ subject: string; html: string }> {
+  const eventCount = data.events.length;
+  const eventText = eventCount === 1 ? 'event' : 'events';
+  
+  const completeData: any = {
+    ...data,
+    subject: `You have been assigned to ${eventCount} ${eventText} in ${data.projectName}`
+  };
+
+  const html = await this.renderTemplate('project-events-assignment', completeData);
+
+  return {
+    subject: completeData.subject,
+    html
+  };
+}
 
 }
 

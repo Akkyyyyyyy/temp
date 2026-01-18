@@ -83,3 +83,26 @@ export const sendEventReminderEmail = async (
 
   await sendEmail(to, subject, html);
 };
+
+export const sendProjectEventsAssignmentEmail = async (
+  to: string,
+  memberName: string,
+  projectName: string,
+  events: Array<{
+    eventName: string;
+    eventDate: string;
+    startHour: string;
+    endHour: string;
+    location: string;
+  }>,
+  companyName: string
+) => {
+  const { subject, html } = await emailRenderer.renderProjectEventsAssignmentEmail({
+    memberName,
+    projectName,
+    events,
+    companyName
+  });
+
+  await sendEmail(to, subject, html);
+};

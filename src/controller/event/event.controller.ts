@@ -562,6 +562,17 @@ class EventController {
 
             // Store project ID for response
             const projectId = existingEvent.project.id;
+            const projectEventsCount = await eventsRepo.count({
+                where: { project: { id: projectId } }
+            });
+
+            if (projectEventsCount <= 1) {
+                return res.status(400).json({
+                    success: false,
+                    message: "Cannot delete the last event of a project. A project must have at least one event."
+                });
+            }
+
             const assignments = await eventAssignmentRepo.find({
                 where: { events: { id: eventId } },
                 relations: ['member']
